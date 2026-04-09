@@ -166,7 +166,8 @@ class QwenService {
         };
 
         if (isI2V) {
-            payload.input.img_url = this.getPublicUrl(fileName);
+            // El archivo esta en uploads/images/
+            payload.input.img_url = this.getPublicUrl(fileName, 'images');
             payload.parameters.resolution = "720P";
         } else {
             payload.parameters.size = "1280*720";
@@ -227,10 +228,10 @@ class QwenService {
     }
 
     // ==========================================
-    // 3. GENERACION DE IMAGENES (Flux)
+    // 3. GENERACION DE IMAGENES (Flux - Async Task)
     // ==========================================
     static async generateImage(prompt) {
-        console.log(`\n[API REQUEST] Generando Imagen`);
+        console.log(`\n[API REQUEST] Generando Imagen (Flux)`);
         console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
         
         if (!prompt || typeof prompt !== 'string') {
@@ -249,38 +250,98 @@ class QwenService {
         };
 
         try {
-            const response = await axios.post(
+            // Paso A: Crear tarea asíncrona
+            const createRes = await axios.post(
                 `${URL_AIGC}/text2image/image-synthesis`, 
                 payload, 
-                { headers: this.getHeaders(), timeout: 60000 }
+                { headers: this.getHeaders(true), timeout: 30000 }
             );
             
-            const imageUrl = response.data?.output?.results?.[0]?.url 
-                          || response.data?.output?.results?.[0]?.image_url
-                          || response.data?.output?.url;
-            
-            if (!imageUrl) {
-                console.log(`[DEBUG] Response: ${JSON.stringify(response.data)}`);
-                throw new Error('No se pudo obtener la URL de la imagen');
+            const taskId = createRes.data?.output?.task_id;
+            if (!taskId) {
+                // Intentar obtener resultado directo si no es async
+                const imageUrl = createRes.data?.output?.results?.[0]?.url 
+                              || createRes.data?.output?.results?.[0]?.b64_image;
+                if (imageUrl) {
+                    if (imageUrl.startsWith('data:') || !imageUrl.startsWith('http')) {
+                        // Es base64, guardarlo
+                        const localFileName = `image_${Date.now()}.png`;
+                        const filePath = path.join(process.cwd(), 'uploads', 'images', localFileName);
+                        const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, '');
+                        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+                        return this.getPublicUrl(localFileName, 'images');
+                    }
+                    const localFileName = `image_${Date.now()}.png`;
+                    return await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
+                }
+                console.log(`[DEBUG] Create Response: ${JSON.stringify(createRes.data)}`);
+                throw new Error('No se pudo crear la tarea de imagen');
             }
             
-            console.log(`[SUCCESS] Image URL: ${imageUrl}`);
+            console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
+
+            // Paso B: Polling hasta que termine
+            let attempts = 0;
+            const maxAttempts = 30;
             
-            // Descargar y guardar localmente
-            const localFileName = `image_${Date.now()}.png`;
-            const localUrl = await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
-            return localUrl;
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 3000));
+                attempts++;
+                
+                const checkRes = await axios.get(
+                    `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`, 
+                    { headers: this.getHeaders(), timeout: 30000 }
+                );
+                
+                const status = checkRes.data?.output?.task_status;
+                console.log(`[POLLING ${attempts}/${maxAttempts}] Estado: ${status}`);
+                
+                if (status === 'SUCCEEDED') {
+                    const results = checkRes.data?.output?.results;
+                    const imageUrl = results?.[0]?.url || results?.[0]?.b64_image;
+                    
+                    if (!imageUrl) {
+                        console.log(`[DEBUG] Success Response: ${JSON.stringify(checkRes.data)}`);
+                        throw new Error('No se encontró URL de imagen en la respuesta');
+                    }
+                    
+                    console.log(`[SUCCESS] Image URL obtenida`);
+                    
+                    // Verificar si es base64 o URL
+                    if (imageUrl.startsWith('data:') || !imageUrl.startsWith('http')) {
+                        const localFileName = `image_${Date.now()}.png`;
+                        const filePath = path.join(process.cwd(), 'uploads', 'images', localFileName);
+                        const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, '');
+                        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+                        return this.getPublicUrl(localFileName, 'images');
+                    }
+                    
+                    const localFileName = `image_${Date.now()}.png`;
+                    const localUrl = await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
+                    return localUrl;
+                }
+                
+                if (status === 'FAILED') {
+                    const errorMsg = checkRes.data?.output?.message || 'Error desconocido';
+                    throw new Error(`Generación de imagen fallida: ${errorMsg}`);
+                }
+            }
+            
+            throw new Error('Timeout: La imagen tardó demasiado en generarse');
         } catch (error) {
             console.error(`[ERROR] Image: ${error.message}`);
-            throw new Error(`Error generando imagen: ${error.response?.data?.error?.message || error.message}`);
+            if (error.response?.data) {
+                console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
+            }
+            throw new Error(`Error generando imagen: ${error.response?.data?.message || error.response?.data?.error?.message || error.message}`);
         }
     }
 
     // ==========================================
-    // 4. TEXT TO SPEECH (CosyVoice)
+    // 4. TEXT TO SPEECH (CosyVoice - Async Task)
     // ==========================================
     static async textToSpeech(text) {
-        console.log(`\n[API REQUEST] Text to Speech`);
+        console.log(`\n[API REQUEST] Text to Speech (CosyVoice)`);
         console.log(`[TEXT] ${text.substring(0, 100)}...`);
         
         if (!text || typeof text !== 'string') {
@@ -300,38 +361,94 @@ class QwenService {
         };
 
         try {
-            const response = await axios.post(
+            // Crear tarea asíncrona
+            const createRes = await axios.post(
                 `${URL_AIGC_INTL}/speech-synthesis/synthesis`, 
                 payload, 
-                { headers: this.getHeaders(), timeout: 60000 }
+                { headers: this.getHeaders(true), timeout: 30000 }
             );
             
-            const audioUrl = response.data?.output?.audio_url 
-                          || response.data?.output?.url
-                          || response.data?.output?.results?.[0]?.audio_url;
+            const taskId = createRes.data?.output?.task_id;
             
-            if (!audioUrl) {
-                console.log(`[DEBUG] TTS Response: ${JSON.stringify(response.data)}`);
-                // Algunos modelos retornan audio en base64
-                if (response.data?.output?.audio) {
-                    // Guardar base64 como archivo
+            // Si hay respuesta directa (sin task_id), procesarla
+            if (!taskId) {
+                const audioUrl = createRes.data?.output?.audio_url 
+                              || createRes.data?.output?.url;
+                const audioBase64 = createRes.data?.output?.audio;
+                
+                if (audioBase64) {
                     const localFileName = `tts_${Date.now()}.mp3`;
                     const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
-                    fs.writeFileSync(filePath, Buffer.from(response.data.output.audio, 'base64'));
+                    fs.writeFileSync(filePath, Buffer.from(audioBase64, 'base64'));
+                    console.log(`[SUCCESS] Audio guardado desde base64`);
                     return this.getPublicUrl(localFileName, 'audio');
                 }
-                throw new Error('No se pudo obtener el audio generado');
+                
+                if (audioUrl) {
+                    const localFileName = `tts_${Date.now()}.mp3`;
+                    const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
+                    return localUrl;
+                }
+                
+                console.log(`[DEBUG] TTS Response: ${JSON.stringify(createRes.data)}`);
+                throw new Error('No se pudo obtener audio de la respuesta directa');
             }
             
-            console.log(`[SUCCESS] Audio URL: ${audioUrl}`);
+            console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
+
+            // Polling hasta que termine
+            let attempts = 0;
+            const maxAttempts = 30;
             
-            // Descargar y guardar localmente
-            const localFileName = `tts_${Date.now()}.mp3`;
-            const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
-            return localUrl;
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 2000));
+                attempts++;
+                
+                const checkRes = await axios.get(
+                    `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`,
+                    { headers: this.getHeaders(), timeout: 30000 }
+                );
+                
+                const status = checkRes.data?.output?.task_status;
+                console.log(`[POLLING ${attempts}/${maxAttempts}] Estado: ${status}`);
+                
+                if (status === 'SUCCEEDED') {
+                    const audioUrl = checkRes.data?.output?.audio_url 
+                                  || checkRes.data?.output?.url;
+                    const audioBase64 = checkRes.data?.output?.audio;
+                    
+                    if (audioBase64) {
+                        const localFileName = `tts_${Date.now()}.mp3`;
+                        const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
+                        fs.writeFileSync(filePath, Buffer.from(audioBase64, 'base64'));
+                        console.log(`[SUCCESS] Audio guardado desde base64`);
+                        return this.getPublicUrl(localFileName, 'audio');
+                    }
+                    
+                    if (audioUrl) {
+                        console.log(`[SUCCESS] Audio URL: ${audioUrl}`);
+                        const localFileName = `tts_${Date.now()}.mp3`;
+                        const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
+                        return localUrl;
+                    }
+                    
+                    console.log(`[DEBUG] TTS Success Response: ${JSON.stringify(checkRes.data)}`);
+                    throw new Error('No se encontró audio en la respuesta');
+                }
+                
+                if (status === 'FAILED') {
+                    const errorMsg = checkRes.data?.output?.message || 'Error desconocido';
+                    throw new Error(`TTS fallido: ${errorMsg}`);
+                }
+            }
+            
+            throw new Error('Timeout: El audio tardó demasiado en generarse');
         } catch (error) {
             console.error(`[ERROR] TTS: ${error.message}`);
-            throw new Error(`Error en TTS: ${error.response?.data?.error?.message || error.message}`);
+            if (error.response?.data) {
+                console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
+            }
+            throw new Error(`Error en TTS: ${error.response?.data?.message || error.response?.data?.error?.message || error.message}`);
         }
     }
 
@@ -346,7 +463,8 @@ class QwenService {
             throw new Error('Se requiere un archivo de audio');
         }
 
-        const fileUrl = this.getPublicUrl(fileName);
+        // El archivo esta en uploads/audio/
+        const fileUrl = this.getPublicUrl(fileName, 'audio');
         console.log(`[FILE URL] ${fileUrl}`);
 
         const payload = {
@@ -431,7 +549,8 @@ class QwenService {
             throw new Error('Se requiere un archivo para análisis visual');
         }
 
-        const fileUrl = this.getPublicUrl(fileName);
+        // El archivo esta en uploads/images/
+        const fileUrl = this.getPublicUrl(fileName, 'images');
         console.log(`[FILE URL] ${fileUrl}`);
 
         const payload = {
