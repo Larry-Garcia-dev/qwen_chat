@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/qwen';
-
+const API_URL = 'http://47.87.38.80:3000/api/qwen';
 // Modos de operación disponibles
 const MODES = [
   { id: 'chat', name: 'Chat', description: 'Conversacion inteligente', icon: 'chat' },
