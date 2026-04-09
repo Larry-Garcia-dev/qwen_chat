@@ -228,113 +228,190 @@ class QwenService {
     }
 
     // ==========================================
-    // 3. GENERACION DE IMAGENES (Flux - Async Task)
+    // 3. GENERACION DE IMAGENES (Wan 2.6 - Sync/Async)
     // ==========================================
     static async generateImage(prompt) {
-        console.log(`\n[API REQUEST] Generando Imagen (Flux)`);
+        console.log(`\n[API REQUEST] Generando Imagen (Wan 2.6)`);
         console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
         
         if (!prompt || typeof prompt !== 'string') {
             throw new Error('El prompt es requerido para generar imagen');
         }
 
+        // Nuevo formato de payload para wan2.6-t2i (API internacional)
         const payload = {
-            model: "flux-schnell",
+            model: "wan2.6-t2i",
             input: {
-                prompt: prompt
+                messages: [
+                    {
+                        role: "user",
+                        content: [
+                            {
+                                text: prompt
+                            }
+                        ]
+                    }
+                ]
             },
             parameters: {
-                size: "1024*1024",
-                n: 1
+                size: "1280*1280",
+                n: 1,
+                prompt_extend: true,
+                watermark: false
             }
         };
 
         try {
-            // Paso A: Crear tarea asíncrona
-            const createRes = await axios.post(
-                `${URL_AIGC}/text2image/image-synthesis`, 
+            // Primero intentamos llamada síncrona (recomendada para wan2.6)
+            console.log(`[IMAGE] Intentando llamada síncrona...`);
+            const syncRes = await axios.post(
+                `${URL_AIGC_INTL}/multimodal-generation/generation`, 
                 payload, 
-                { headers: this.getHeaders(true), timeout: 30000 }
+                { headers: this.getHeaders(), timeout: 120000 } // 2 min timeout para sync
             );
             
-            const taskId = createRes.data?.output?.task_id;
-            if (!taskId) {
-                // Intentar obtener resultado directo si no es async
-                const imageUrl = createRes.data?.output?.results?.[0]?.url 
-                              || createRes.data?.output?.results?.[0]?.b64_image;
+            // Verificar si es respuesta síncrona exitosa
+            const choices = syncRes.data?.output?.choices;
+            if (choices && choices.length > 0) {
+                const imageUrl = choices[0]?.message?.content?.[0]?.image;
                 if (imageUrl) {
-                    if (imageUrl.startsWith('data:') || !imageUrl.startsWith('http')) {
-                        // Es base64, guardarlo
-                        const localFileName = `image_${Date.now()}.png`;
-                        const filePath = path.join(process.cwd(), 'uploads', 'images', localFileName);
-                        const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, '');
-                        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
-                        return this.getPublicUrl(localFileName, 'images');
-                    }
-                    const localFileName = `image_${Date.now()}.png`;
-                    return await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
-                }
-                console.log(`[DEBUG] Create Response: ${JSON.stringify(createRes.data)}`);
-                throw new Error('No se pudo crear la tarea de imagen');
-            }
-            
-            console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
-
-            // Paso B: Polling hasta que termine
-            let attempts = 0;
-            const maxAttempts = 30;
-            
-            while (attempts < maxAttempts) {
-                await new Promise(r => setTimeout(r, 3000));
-                attempts++;
-                
-                const checkRes = await axios.get(
-                    `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`, 
-                    { headers: this.getHeaders(), timeout: 30000 }
-                );
-                
-                const status = checkRes.data?.output?.task_status;
-                console.log(`[POLLING ${attempts}/${maxAttempts}] Estado: ${status}`);
-                
-                if (status === 'SUCCEEDED') {
-                    const results = checkRes.data?.output?.results;
-                    const imageUrl = results?.[0]?.url || results?.[0]?.b64_image;
-                    
-                    if (!imageUrl) {
-                        console.log(`[DEBUG] Success Response: ${JSON.stringify(checkRes.data)}`);
-                        throw new Error('No se encontró URL de imagen en la respuesta');
-                    }
-                    
-                    console.log(`[SUCCESS] Image URL obtenida`);
-                    
-                    // Verificar si es base64 o URL
-                    if (imageUrl.startsWith('data:') || !imageUrl.startsWith('http')) {
-                        const localFileName = `image_${Date.now()}.png`;
-                        const filePath = path.join(process.cwd(), 'uploads', 'images', localFileName);
-                        const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, '');
-                        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
-                        return this.getPublicUrl(localFileName, 'images');
-                    }
-                    
+                    console.log(`[SUCCESS] Imagen generada (sync)`);
                     const localFileName = `image_${Date.now()}.png`;
                     const localUrl = await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
                     return localUrl;
                 }
-                
-                if (status === 'FAILED') {
-                    const errorMsg = checkRes.data?.output?.message || 'Error desconocido';
-                    throw new Error(`Generación de imagen fallida: ${errorMsg}`);
-                }
             }
             
-            throw new Error('Timeout: La imagen tardó demasiado en generarse');
+            // Si no hay choices, puede ser respuesta async con task_id
+            const taskId = syncRes.data?.output?.task_id;
+            if (taskId) {
+                console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
+                return await this.pollImageTask(taskId);
+            }
+            
+            console.log(`[DEBUG] Response: ${JSON.stringify(syncRes.data)}`);
+            throw new Error('Respuesta inesperada del servicio de imagen');
+            
         } catch (error) {
+            // Si falla sync, intentar async
+            if (error.response?.status === 400 || error.message.includes('synchronous')) {
+                console.log(`[IMAGE] Sync no disponible, intentando async...`);
+                return await this.generateImageAsync(prompt);
+            }
+            
             console.error(`[ERROR] Image: ${error.message}`);
             if (error.response?.data) {
                 console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
             }
             throw new Error(`Error generando imagen: ${error.response?.data?.message || error.response?.data?.error?.message || error.message}`);
         }
+    }
+
+    // Metodo auxiliar para generacion async de imagenes
+    static async generateImageAsync(prompt) {
+        const payload = {
+            model: "wan2.6-t2i",
+            input: {
+                messages: [
+                    {
+                        role: "user",
+                        content: [
+                            {
+                                text: prompt
+                            }
+                        ]
+                    }
+                ]
+            },
+            parameters: {
+                size: "1280*1280",
+                n: 1,
+                prompt_extend: true,
+                watermark: false
+            }
+        };
+
+        try {
+            const createRes = await axios.post(
+                `${URL_AIGC_INTL}/image-generation/generation`, 
+                payload, 
+                { headers: this.getHeaders(true), timeout: 30000 }
+            );
+            
+            const taskId = createRes.data?.output?.task_id;
+            if (!taskId) {
+                console.log(`[DEBUG] Async Response: ${JSON.stringify(createRes.data)}`);
+                throw new Error('No se pudo crear la tarea de imagen async');
+            }
+            
+            console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
+            return await this.pollImageTask(taskId);
+            
+        } catch (error) {
+            console.error(`[ERROR] Image Async: ${error.message}`);
+            if (error.response?.data) {
+                console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
+            }
+            throw new Error(`Error generando imagen: ${error.response?.data?.message || error.response?.data?.error?.message || error.message}`);
+        }
+    }
+
+    // Metodo auxiliar para polling de tareas de imagen
+    static async pollImageTask(taskId) {
+        let attempts = 0;
+        const maxAttempts = 40; // ~2 minutos con 3s de espera
+        
+        while (attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 3000));
+            attempts++;
+            
+            const checkRes = await axios.get(
+                `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`, 
+                { headers: this.getHeaders(), timeout: 30000 }
+            );
+            
+            const status = checkRes.data?.output?.task_status;
+            console.log(`[POLLING ${attempts}/${maxAttempts}] Estado: ${status}`);
+            
+            if (status === 'SUCCEEDED') {
+                // Nuevo formato de respuesta para wan2.6
+                const choices = checkRes.data?.output?.choices;
+                let imageUrl = choices?.[0]?.message?.content?.[0]?.image;
+                
+                // Fallback al formato antiguo
+                if (!imageUrl) {
+                    const results = checkRes.data?.output?.results;
+                    imageUrl = results?.[0]?.url || results?.[0]?.b64_image;
+                }
+                
+                if (!imageUrl) {
+                    console.log(`[DEBUG] Success Response: ${JSON.stringify(checkRes.data)}`);
+                    throw new Error('No se encontró URL de imagen en la respuesta');
+                }
+                
+                console.log(`[SUCCESS] Image URL obtenida`);
+                
+                // Verificar si es base64 o URL
+                if (imageUrl.startsWith('data:') || !imageUrl.startsWith('http')) {
+                    const localFileName = `image_${Date.now()}.png`;
+                    const filePath = path.join(process.cwd(), 'uploads', 'images', localFileName);
+                    const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, '');
+                    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+                    return this.getPublicUrl(localFileName, 'images');
+                }
+                
+                const localFileName = `image_${Date.now()}.png`;
+                const localUrl = await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
+                return localUrl;
+            }
+            
+            if (status === 'FAILED') {
+                const errorMsg = checkRes.data?.output?.message || checkRes.data?.output?.code || 'Error desconocido';
+                throw new Error(`Generación de imagen fallida: ${errorMsg}`);
+            }
+        }
+        
+        throw new Error('Timeout: La imagen tardó demasiado en generarse');
     }
 
     // ==========================================
