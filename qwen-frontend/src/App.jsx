@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import './App.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002/api/qwen';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/qwen';
 
 const MODELS = [
-  { id: 'qwen-turbo', name: 'Qwen Turbo', description: 'Rapido y eficiente para texto', icon: '⚡' },
-  { id: 'qwen-max', name: 'Qwen Max', description: 'Maximo poder para tareas complejas', icon: '🧠' },
-  { id: 'qwen-vl-plus', name: 'Qwen Vision', description: 'Analiza imagenes y documentos', icon: '👁' },
+  { id: 'qwen-turbo', name: 'Qwen Turbo', description: 'Rápido y eficiente para texto', icon: '⚡' },
+  { id: 'qwen-max', name: 'Qwen Max', description: 'Máximo poder para tareas complejas', icon: '🧠' },
+  { id: 'qwen-vl-plus', name: 'Qwen Vision', description: 'Analiza imágenes y documentos', icon: '👁' },
   { id: 'qwen-audio-turbo', name: 'Qwen Audio', description: 'Procesa y analiza audio', icon: '🎵' },
 ];
 
@@ -31,8 +31,9 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const addMessage = (content, sender, type = 'text') => {
-    setMessages((prev) => [...prev, { content, sender, type, timestamp: new Date() }]);
+  // ACTUALIZACIÓN 1: Agregado el parámetro `isMedia` para saber si es texto o archivo multimedia
+  const addMessage = (content, sender, type = 'text', isMedia = false) => {
+    setMessages((prev) => [...prev, { content, sender, type, isMedia, timestamp: new Date() }]);
   };
 
   const handleSendMessage = async () => {
@@ -62,7 +63,7 @@ function App() {
         addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
       }
     } catch (error) {
-      addMessage(`Error de conexion: ${error.message}`, 'bot', 'error');
+      addMessage(`Error de conexión: ${error.message}`, 'bot', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -75,9 +76,10 @@ function App() {
     }
   };
 
+  // ACTUALIZACIÓN 2: Lógica adaptada para recibir y mostrar la URL de la imagen
   const handleGenerateImage = async () => {
     if (!inputText.trim()) {
-      addMessage('Por favor, escribe una descripcion para la imagen', 'bot', 'error');
+      addMessage('Por favor, escribe una descripción para la imagen', 'bot', 'error');
       return;
     }
     
@@ -91,7 +93,82 @@ function App() {
         body: JSON.stringify({ prompt: inputText })
       });
       const data = await response.json();
-      addMessage(data.message || "Solicitud de imagen enviada", 'bot');
+      
+      if (data.success) {
+        const isUrl = typeof data.data === 'string' && data.data.startsWith('http');
+        addMessage(data.data, 'bot', 'text', isUrl);
+      } else {
+        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
+      }
+    } catch (error) {
+      addMessage(`Error: ${error.message}`, 'bot', 'error');
+    } finally {
+      setIsLoading(false);
+      setInputText('');
+    }
+  };
+
+  // ACTUALIZACIÓN 3: Nueva función para Generación de Video (Wan 2.6)
+  const handleGenerateVideo = async () => {
+    if (!inputText.trim() && !selectedFile) {
+      addMessage('Por favor, escribe un prompt o sube una imagen base para el video', 'bot', 'error');
+      return;
+    }
+
+    addMessage(`Generando video (Wan 2.6)... Esto puede tardar 1-2 minutos.`, 'user');
+    setIsLoading(true);
+
+    const formData = new FormData();
+    if (selectedFile) formData.append('file', selectedFile);
+    formData.append('prompt', inputText);
+
+    try {
+      const response = await fetch(`${API_URL}/generate-video`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        addMessage(data.data, 'bot', 'text', true); // Se asume que retorna URL
+      } else {
+        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
+      }
+    } catch (error) {
+      addMessage(`Error: ${error.message}`, 'bot', 'error');
+    } finally {
+      setIsLoading(false);
+      setInputText('');
+      setSelectedFile(null);
+    }
+  };
+
+  // ACTUALIZACIÓN 4: Nueva función para Text-To-Speech
+  const handleTTS = async () => {
+    if (!inputText.trim()) {
+      addMessage('Escribe el texto que deseas convertir a voz', 'bot', 'error');
+      return;
+    }
+
+    addMessage(`Convirtiendo a voz: "${inputText}"`, 'user');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(`${API_URL}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: inputText })
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        // Ajustamos la estructura según la API de Alibaba
+        const audioUrl = data.data?.output?.results?.[0]?.audio_url || data.data?.output?.url || JSON.stringify(data.data);
+        const isUrl = typeof audioUrl === 'string' && audioUrl.startsWith('http');
+        addMessage(audioUrl, 'bot', 'text', isUrl);
+      } else {
+        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
+      }
     } catch (error) {
       addMessage(`Error: ${error.message}`, 'bot', 'error');
     } finally {
@@ -120,7 +197,7 @@ function App() {
         mediaRecorderRef.current.start();
         setIsRecording(true);
       } catch (error) {
-        addMessage("Error al acceder al microfono: " + error.message, 'bot', 'error');
+        addMessage("Error al acceder al micrófono: " + error.message, 'bot', 'error');
       }
     } else {
       mediaRecorderRef.current.stop();
@@ -174,7 +251,7 @@ function App() {
         addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
       }
     } catch (error) {
-      addMessage(`Error de conexion: ${error.message}`, 'bot', 'error');
+      addMessage(`Error de conexión: ${error.message}`, 'bot', 'error');
     } finally {
       setIsLoading(false);
       setSelectedFile(null);
@@ -214,7 +291,6 @@ function App() {
     }
   };
 
-  // Drag and Drop handlers
   const handleDragOver = (e) => {
     e.preventDefault();
     setIsDragging(true);
@@ -278,7 +354,6 @@ function App() {
 
       {/* Main Chat Area */}
       <main className="chat-main">
-        {/* Header */}
         <header className="chat-header">
           <div className="header-info">
             <h1>Macondo Chat</h1>
@@ -297,7 +372,6 @@ function App() {
           </button>
         </header>
 
-        {/* Mobile Model Selector */}
         {showModelSelector && (
           <div className="mobile-model-selector">
             {MODELS.map((m) => (
@@ -316,7 +390,6 @@ function App() {
           </div>
         )}
 
-        {/* Chat Messages */}
         <div 
           className={`chat-messages ${isDragging ? 'dragging' : ''}`}
           onDragOver={handleDragOver}
@@ -331,7 +404,7 @@ function App() {
                   <polyline points="17 8 12 3 7 8"/>
                   <line x1="12" y1="3" x2="12" y2="15"/>
                 </svg>
-                <p>Suelta el archivo aqui</p>
+                <p>Suelta el archivo aquí</p>
               </div>
             </div>
           )}
@@ -341,24 +414,12 @@ function App() {
               <img src="/logo.png" alt="Macondo" className="empty-logo" />
               <h2>Bienvenido a Macondo Chat</h2>
               <p>Escribe un mensaje, sube un archivo o graba audio para comenzar</p>
-              <div className="quick-actions">
-                <button onClick={() => setInputText('Explicame que puedes hacer')}>
-                  Que puedes hacer?
-                </button>
-                <button onClick={() => setInputText('Ayudame a analizar un documento')}>
-                  Analizar documento
-                </button>
-                <button onClick={() => setInputText('Genera una idea creativa')}>
-                  Idea creativa
-                </button>
-              </div>
             </div>
           ) : (
             messages.map((msg, index) => (
               <div 
                 key={index} 
                 className={`message ${msg.sender} ${msg.type === 'error' ? 'error' : ''}`}
-                style={{ animationDelay: `${index * 0.05}s` }}
               >
                 {msg.sender === 'bot' && (
                   <div className="message-avatar bot-avatar">
@@ -366,48 +427,23 @@ function App() {
                   </div>
                 )}
                 <div className="message-content">
-                  {msg.type === 'file' && (
-                    <div className="message-file-badge">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                        <polyline points="14 2 14 8 20 8"/>
-                      </svg>
-                      Archivo adjunto
-                    </div>
+                  {/* ACTUALIZACIÓN 5: Lógica de renderizado Visual de Medios (Videos, Audios e Imágenes) */}
+                  {msg.isMedia && typeof msg.content === 'string' ? (
+                      msg.content.match(/\.(mp4|webm|mov)$/i) ? (
+                        <video src={msg.content} controls style={{ maxWidth: '100%', borderRadius: '8px' }} />
+                      ) : msg.content.match(/\.(mp3|wav|ogg)$/i) ? (
+                        <audio src={msg.content} controls style={{ maxWidth: '100%' }} />
+                      ) : (
+                        <img src={msg.content} alt="Media generada" style={{ maxWidth: '100%', borderRadius: '8px' }} />
+                      )
+                  ) : (
+                      <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
                   )}
-                  {msg.type === 'audio' && (
-                    <div className="message-file-badge audio">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                        <line x1="12" y1="19" x2="12" y2="23"/>
-                        <line x1="8" y1="23" x2="16" y2="23"/>
-                      </svg>
-                      Audio
-                    </div>
-                  )}
-                  {msg.type === 'url' && (
-                    <div className="message-file-badge url">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                      </svg>
-                      URL
-                    </div>
-                  )}
-                  <p>{msg.content}</p>
+                  
                   <span className="message-time">
                     {msg.timestamp.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
-                {msg.sender === 'user' && (
-                  <div className="message-avatar user-avatar">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                      <circle cx="12" cy="7" r="4"/>
-                    </svg>
-                  </div>
-                )}
               </div>
             ))
           )}
@@ -419,9 +455,7 @@ function App() {
               </div>
               <div className="message-content">
                 <div className="typing-indicator">
-                  <span></span>
-                  <span></span>
-                  <span></span>
+                  <span></span><span></span><span></span>
                 </div>
               </div>
             </div>
@@ -430,64 +464,21 @@ function App() {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Input Area */}
         <div className="input-area">
-          {/* File Preview */}
           {selectedFile && (
             <div className="file-preview">
               <div className="file-info">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                </svg>
                 <span>{selectedFile.name}</span>
                 <span className="file-size">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
               </div>
-              <button className="remove-file" onClick={removeFile}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {/* URL Input */}
-          {showUrlInput && (
-            <div className="url-input-container">
-              <input
-                type="url"
-                placeholder="Pega una URL aqui..."
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleUrlSubmit()}
-              />
-              <button className="url-submit" onClick={handleUrlSubmit} disabled={!urlInput.trim()}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="22" y1="2" x2="11" y2="13"/>
-                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                </svg>
-              </button>
-              <button className="url-cancel" onClick={() => { setShowUrlInput(false); setUrlInput(''); }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
+              <button className="remove-file" onClick={removeFile}>X</button>
             </div>
           )}
 
           <div className="input-row">
-            {/* Action Buttons */}
             <div className="action-buttons">
-              <button 
-                className="action-btn" 
-                onClick={() => fileInputRef.current?.click()}
-                title="Subir archivo"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-                </svg>
+              <button className="action-btn" onClick={() => fileInputRef.current?.click()} title="Subir archivo">
+                📁
               </button>
               <input
                 ref={fileInputRef}
@@ -496,42 +487,14 @@ function App() {
                 onChange={(e) => setSelectedFile(e.target.files[0])}
                 style={{ display: 'none' }}
               />
-              
-              <button 
-                className="action-btn"
-                onClick={() => setShowUrlInput(!showUrlInput)}
-                title="Agregar URL"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                </svg>
-              </button>
-
-              <button 
-                className={`action-btn record-btn ${isRecording ? 'recording' : ''}`}
-                onClick={toggleRecording}
-                title={isRecording ? 'Detener grabacion' : 'Grabar audio'}
-              >
-                {isRecording ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="6" y="6" width="12" height="12" rx="2"/>
-                  </svg>
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                    <line x1="12" y1="19" x2="12" y2="23"/>
-                    <line x1="8" y1="23" x2="16" y2="23"/>
-                  </svg>
-                )}
+              <button className={`action-btn record-btn ${isRecording ? 'recording' : ''}`} onClick={toggleRecording} title="Grabar audio">
+                {isRecording ? "⏹" : "🎤"}
               </button>
             </div>
 
-            {/* Text Input */}
             <div className="text-input-container">
               <textarea
-                placeholder="Escribe tu mensaje..."
+                placeholder="Escribe tu mensaje o prompt..."
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyPress={handleKeyPress}
@@ -539,30 +502,25 @@ function App() {
               />
             </div>
 
-            {/* Send Buttons */}
-            <div className="send-buttons">
-              <button 
-                className="send-btn primary"
-                onClick={handleSendMessage}
-                disabled={isLoading || (!inputText.trim() && !selectedFile)}
-                title="Enviar mensaje"
-              >
+            {/* ACTUALIZACIÓN 6: Agregados los botones de enviar para Imagen, Video y Voz */}
+            <div className="send-buttons" style={{ display: 'flex', gap: '5px' }}>
+              <button className="send-btn primary" onClick={handleSendMessage} disabled={isLoading || (!inputText.trim() && !selectedFile)} title="Enviar Chat/Análisis">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="22" y1="2" x2="11" y2="13"/>
                   <polygon points="22 2 15 22 11 13 2 9 22 2"/>
                 </svg>
               </button>
-              <button 
-                className="send-btn secondary"
-                onClick={handleGenerateImage}
-                disabled={isLoading || !inputText.trim()}
-                title="Generar imagen"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                  <circle cx="8.5" cy="8.5" r="1.5"/>
-                  <polyline points="21 15 16 10 5 21"/>
-                </svg>
+              
+              <button className="send-btn secondary" onClick={handleGenerateImage} disabled={isLoading || !inputText.trim()} title="Generar Imagen">
+                🖼️
+              </button>
+
+              <button className="send-btn secondary" onClick={handleGenerateVideo} disabled={isLoading || (!inputText.trim() && !selectedFile)} title="Generar Video (T2V/I2V)">
+                🎬
+              </button>
+
+              <button className="send-btn secondary" onClick={handleTTS} disabled={isLoading || !inputText.trim()} title="Texto a Voz (TTS)">
+                🗣️
               </button>
             </div>
           </div>

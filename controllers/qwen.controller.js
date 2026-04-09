@@ -2,19 +2,38 @@ const QwenService = require('../services/qwen.service');
 
 exports.handleChat = async (req, res) => {
     try {
-        const { prompt, model } = req.body;
-        const response = await QwenService.chat(prompt, model);
+        const response = await QwenService.chat(req.body.prompt);
         res.json({ success: true, data: response });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.response?.data || error.message });
+        res.status(500).json({ success: false, error: error.message });
     }
 };
 
 exports.handleImageGeneration = async (req, res) => {
     try {
-        // Nota: Wanx usa un endpoint distinto, esto requerirá ajuste futuro si usas Wanx real, 
-        // pero lo dejamos igual para no romper tu UI por ahora.
-        res.json({ success: true, message: "Endpoint de imagen pendiente de integración con Wanx." });
+        const response = await QwenService.generateImage(req.body.prompt);
+        res.json({ success: true, data: response }); // Será una URL
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+exports.handleVideoGeneration = async (req, res) => {
+    try {
+        const prompt = req.body.prompt;
+        const fileName = req.file ? req.file.filename : null;
+        // Si hay archivo, será Image-to-Video. Si no, Text-to-Video.
+        const response = await QwenService.generateVideo(prompt, fileName);
+        res.json({ success: true, data: response }); // Retorna la URL del video mp4
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+exports.handleTextToSpeech = async (req, res) => {
+    try {
+        const response = await QwenService.textToSpeech(req.body.prompt);
+        res.json({ success: true, data: response });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -22,29 +41,19 @@ exports.handleImageGeneration = async (req, res) => {
 
 exports.handleAudioToText = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ error: "No se subió ningún audio" });
-        const filePath = req.file.path; 
-        res.json({ success: true, data: `Audio recibido en ${filePath}`, path: filePath });
+        if (!req.file) return res.status(400).json({ error: "No se subió audio" });
+        const response = await QwenService.audioToText(req.file.filename, req.body.prompt);
+        res.json({ success: true, data: response });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 };
 
-exports.handleTextToAudio = async (req, res) => {
-    res.json({ success: true, message: "Endpoint TTS listo." });
-};
-
-// --- ACTUALIZADO PARA RECIBIR ARCHIVO + PREGUNTA ---
 exports.handleMultimodal = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ success: false, error: "No se subió ningún archivo" });
-        
-        const prompt = req.body.prompt || "Describe detalladamente este archivo.";
-        const filePath = req.file.path;
-        
-        const response = await QwenService.chatVision(filePath, prompt);
-        
-        res.json({ success: true, data: response, file: filePath });
+        if (!req.file) return res.status(400).json({ success: false, error: "Sin archivo" });
+        const response = await QwenService.chatVision(req.file.filename, req.body.prompt || "Describe esto.");
+        res.json({ success: true, data: response });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
