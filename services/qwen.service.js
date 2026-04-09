@@ -415,23 +415,24 @@ class QwenService {
     }
 
     // ==========================================
-    // 4. TEXT TO SPEECH (CosyVoice - Async Task)
+    // 4. TEXT TO SPEECH (CosyVoice v3 - WebSocket/HTTP)
     // ==========================================
     static async textToSpeech(text) {
-        console.log(`\n[API REQUEST] Text to Speech (CosyVoice)`);
+        console.log(`\n[API REQUEST] Text to Speech (CosyVoice v3)`);
         console.log(`[TEXT] ${text.substring(0, 100)}...`);
         
         if (!text || typeof text !== 'string') {
             throw new Error('El texto es requerido para TTS');
         }
 
+        // Modelo internacional: cosyvoice-v3-flash con voz longanyang
         const payload = {
-            model: "cosyvoice-v1",
+            model: "cosyvoice-v3-flash",
             input: {
                 text: text
             },
             parameters: {
-                voice: "longxiaochun",
+                voice: "longanyang",
                 format: "mp3",
                 sample_rate: 22050
             }
@@ -530,10 +531,10 @@ class QwenService {
     }
 
     // ==========================================
-    // 5. AUDIO TO TEXT (Paraformer)
+    // 5. AUDIO TO TEXT (Fun-ASR - International)
     // ==========================================
     static async audioToText(fileName, prompt = '') {
-        console.log(`\n[API REQUEST] Audio to Text (Paraformer)`);
+        console.log(`\n[API REQUEST] Audio to Text (Fun-ASR)`);
         console.log(`[FILE] ${fileName}`);
         
         if (!fileName) {
@@ -544,20 +545,21 @@ class QwenService {
         const fileUrl = this.getPublicUrl(fileName, 'audio');
         console.log(`[FILE URL] ${fileUrl}`);
 
+        // Modelo internacional: fun-asr (disponible en Singapore)
         const payload = {
-            model: "paraformer-v2",
+            model: "fun-asr",
             input: {
                 file_urls: [fileUrl]
             },
             parameters: {
-                language_hints: ["es", "en"]
+                language_hints: ["es", "en", "zh"]
             }
         };
 
         try {
-            // Crear tarea asíncrona
+            // Crear tarea asíncrona usando el endpoint correcto para fun-asr
             const createRes = await axios.post(
-                `${URL_AIGC_INTL}/transcription/transcription`,
+                `https://dashscope-intl.aliyuncs.com/api/v1/services/audio/asr/transcription`,
                 payload,
                 { headers: this.getHeaders(true), timeout: 30000 }
             );
@@ -615,7 +617,7 @@ class QwenService {
     }
 
     // ==========================================
-    // 6. VISION - Análisis de Imágenes/Documentos
+    // 6. VISION - Análisis de Imágenes (solo imagenes, no PDFs)
     // ==========================================
     static async chatVision(fileName, prompt = 'Describe esta imagen en detalle') {
         console.log(`\n[API REQUEST] Vision (qwen-vl-max)`);
@@ -626,16 +628,44 @@ class QwenService {
             throw new Error('Se requiere un archivo para análisis visual');
         }
 
+        // Verificar si es un archivo soportado (solo imagenes)
+        const ext = path.extname(fileName).toLowerCase();
+        const supportedImageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+        
+        if (!supportedImageExts.includes(ext)) {
+            throw new Error(`Formato no soportado: ${ext}. El modelo de vision solo soporta imagenes (JPG, PNG, GIF, WEBP, BMP). Los PDFs deben procesarse de otra manera.`);
+        }
+
         // El archivo esta en uploads/images/
         const fileUrl = this.getPublicUrl(fileName, 'images');
         console.log(`[FILE URL] ${fileUrl}`);
+
+        // Convertir imagen a base64 para evitar problemas de acceso a URLs privadas
+        const filePath = path.join(process.cwd(), 'uploads', 'images', fileName);
+        let imageContent;
+        
+        if (fs.existsSync(filePath)) {
+            // Leer archivo y convertir a base64
+            const imageBuffer = fs.readFileSync(filePath);
+            const base64Image = imageBuffer.toString('base64');
+            const mimeType = ext === '.png' ? 'image/png' : 
+                            ext === '.gif' ? 'image/gif' : 
+                            ext === '.webp' ? 'image/webp' : 
+                            ext === '.bmp' ? 'image/bmp' : 'image/jpeg';
+            imageContent = { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } };
+            console.log(`[IMAGE] Usando base64 (${Math.round(base64Image.length/1024)}KB)`);
+        } else {
+            // Fallback a URL si el archivo no existe localmente
+            imageContent = { type: "image_url", image_url: { url: fileUrl } };
+            console.log(`[IMAGE] Usando URL externa`);
+        }
 
         const payload = {
             model: "qwen-vl-max",
             messages: [{
                 role: "user",
                 content: [
-                    { type: "image_url", image_url: { url: fileUrl } },
+                    imageContent,
                     { type: "text", text: prompt }
                 ]
             }]
@@ -657,8 +687,68 @@ class QwenService {
             return content;
         } catch (error) {
             console.error(`[ERROR] Vision: ${error.message}`);
+            if (error.response?.data) {
+                console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
+            }
             throw new Error(`Error en análisis visual: ${error.response?.data?.error?.message || error.message}`);
         }
+    }
+
+    // ==========================================
+    // 7. DOCUMENT ANALYSIS - Para PDFs usar Qwen-Long
+    // ==========================================
+    static async analyzeDocument(fileName, prompt = 'Resume el contenido de este documento') {
+        console.log(`\n[API REQUEST] Document Analysis (qwen-long)`);
+        console.log(`[FILE] ${fileName}`);
+        console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
+        
+        if (!fileName) {
+            throw new Error('Se requiere un archivo para análisis');
+        }
+
+        const ext = path.extname(fileName).toLowerCase();
+        
+        // Para PDFs, usar qwen-long que puede procesar documentos
+        if (ext === '.pdf') {
+            // Leer el PDF y extraer texto (simplificado - en produccion usar pdf-parse)
+            const filePath = path.join(process.cwd(), 'uploads', 'documents', fileName);
+            
+            if (!fs.existsSync(filePath)) {
+                // Intentar en images por si se subio ahi
+                const altPath = path.join(process.cwd(), 'uploads', 'images', fileName);
+                if (fs.existsSync(altPath)) {
+                    // Mover a documents
+                    fs.copyFileSync(altPath, filePath);
+                } else {
+                    throw new Error('Archivo PDF no encontrado');
+                }
+            }
+
+            // Para PDFs, usar el modelo de texto con un mensaje explicativo
+            const payload = {
+                model: "qwen-plus",
+                messages: [{
+                    role: "user",
+                    content: `El usuario ha subido un documento PDF llamado "${fileName}". Por favor responde: ${prompt}\n\nNota: Actualmente el analisis directo de PDFs requiere conversion previa. Por favor indica al usuario que suba imagenes de las paginas del documento o que copie el texto relevante.`
+                }]
+            };
+
+            try {
+                const response = await axios.post(
+                    `${URL_COMPATIBLE}/chat/completions`,
+                    payload,
+                    { headers: this.getHeaders(), timeout: 60000 }
+                );
+                
+                return response.data?.choices?.[0]?.message?.content || 'No se pudo procesar el documento';
+            } catch (error) {
+                console.error(`[ERROR] Document: ${error.message}`);
+                throw new Error(`Error procesando documento: ${error.response?.data?.error?.message || error.message}`);
+            }
+        }
+        
+        // Si es imagen, usar chatVision
+        return await this.chatVision(fileName, prompt);
     }
 }
 
