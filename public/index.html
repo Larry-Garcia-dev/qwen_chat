@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Qwen AI Interface</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: auto; padding: 20px; background: #f4f4f9; }
+        .box { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        select, input, button, textarea { padding: 10px; margin-top: 5px; width: 100%; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        .controls { display: flex; gap: 10px; margin-top: 10px; }
+        #chat-box { height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background: #fafafa; }
+        .msg { margin-bottom: 10px; padding: 8px; border-radius: 5px; }
+        .user { background: #d1e7dd; text-align: right; }
+        .bot { background: #e2e3e5; text-align: left; }
+    </style>
+</head>
+<body>
+
+    <div class="box">
+        <h2>Panel de Control Qwen</h2>
+        <label>Selecciona el Modelo:</label>
+        <select id="model-select">
+            <option value="qwen-turbo">Qwen Turbo (Texto)</option>
+            <option value="qwen-max">Qwen Max (Texto Avanzado)</option>
+            <option value="qwen-vl-plus">Qwen VL (Visión/Documentos)</option>
+            <option value="qwen-audio-turbo">Qwen Audio (Análisis de Voz)</option>
+        </select>
+    </div>
+
+    <div class="box">
+        <div id="chat-box"></div>
+        <textarea id="user-input" rows="3" placeholder="Escribe tu mensaje..."></textarea>
+        
+        <div class="controls">
+            <button onclick="sendMessage()">Enviar Texto</button>
+            <button onclick="generateImage()">Crear Imagen</button>
+        </div>
+
+        <hr>
+        <h4>Multimedia y Archivos</h4>
+        <input type="file" id="file-upload" accept="image/*, audio/*, .pdf">
+        <div class="controls">
+            <button onclick="uploadFile()">Subir Archivo</button>
+            <button id="btn-record" style="background: #dc3545;" onclick="toggleRecording()">🎤 Grabar Voz</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
