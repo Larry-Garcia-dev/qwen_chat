@@ -1,60 +1,190 @@
 const QwenService = require('../services/qwen.service');
 
-exports.handleChat = async (req, res) => {
-    try {
-        const response = await QwenService.chat(req.body.prompt);
-        res.json({ success: true, data: response });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+/**
+ * Wrapper para manejar errores de forma consistente
+ */
+const asyncHandler = (fn) => (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch((error) => {
+        console.error(`[CONTROLLER ERROR] ${error.message}`);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    });
 };
 
-exports.handleImageGeneration = async (req, res) => {
-    try {
-        const response = await QwenService.generateImage(req.body.prompt);
-        res.json({ success: true, data: response }); // Será una URL
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+/**
+ * POST /api/qwen/chat
+ * Chat con el modelo de texto Qwen Plus
+ */
+exports.handleChat = asyncHandler(async (req, res) => {
+    const { prompt, enableThinking = true } = req.body;
+    
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({
+            success: false,
+            error: 'El campo "prompt" es requerido y debe ser texto'
+        });
     }
-};
+    
+    console.log(`[CHAT] Prompt recibido: ${prompt.substring(0, 50)}...`);
+    const response = await QwenService.chat(prompt.trim(), enableThinking);
+    
+    res.json({
+        success: true,
+        data: response,
+        type: 'text'
+    });
+});
 
-exports.handleVideoGeneration = async (req, res) => {
-    try {
-        const prompt = req.body.prompt;
-        const fileName = req.file ? req.file.filename : null;
-        // Si hay archivo, será Image-to-Video. Si no, Text-to-Video.
-        const response = await QwenService.generateVideo(prompt, fileName);
-        res.json({ success: true, data: response }); // Retorna la URL del video mp4
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+/**
+ * POST /api/qwen/generate-image
+ * Genera una imagen a partir de un prompt
+ */
+exports.handleImageGeneration = asyncHandler(async (req, res) => {
+    const { prompt } = req.body;
+    
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({
+            success: false,
+            error: 'El campo "prompt" es requerido para generar imagen'
+        });
     }
-};
+    
+    console.log(`[IMAGE] Generando imagen: ${prompt.substring(0, 50)}...`);
+    const imageUrl = await QwenService.generateImage(prompt.trim());
+    
+    res.json({
+        success: true,
+        data: imageUrl,
+        type: 'image'
+    });
+});
 
-exports.handleTextToSpeech = async (req, res) => {
-    try {
-        const response = await QwenService.textToSpeech(req.body.prompt);
-        res.json({ success: true, data: response });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+/**
+ * POST /api/qwen/generate-video
+ * Genera un video (Text-to-Video o Image-to-Video)
+ */
+exports.handleVideoGeneration = asyncHandler(async (req, res) => {
+    const { prompt } = req.body;
+    const fileName = req.file ? req.file.filename : null;
+    
+    if (!prompt && !fileName) {
+        return res.status(400).json({
+            success: false,
+            error: 'Se requiere un prompt o una imagen para generar video'
+        });
     }
-};
+    
+    const mode = fileName ? 'Image-to-Video' : 'Text-to-Video';
+    console.log(`[VIDEO] Modo: ${mode}, Prompt: ${prompt?.substring(0, 50) || 'N/A'}`);
+    
+    const videoUrl = await QwenService.generateVideo(prompt, fileName);
+    
+    res.json({
+        success: true,
+        data: videoUrl,
+        type: 'video',
+        mode: mode
+    });
+});
 
-exports.handleAudioToText = async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ error: "No se subió audio" });
-        const response = await QwenService.audioToText(req.file.filename, req.body.prompt);
-        res.json({ success: true, data: response });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+/**
+ * POST /api/qwen/tts
+ * Convierte texto a voz
+ */
+exports.handleTextToSpeech = asyncHandler(async (req, res) => {
+    const { prompt, text } = req.body;
+    const inputText = text || prompt; // Soportar ambos campos
+    
+    if (!inputText || typeof inputText !== 'string' || !inputText.trim()) {
+        return res.status(400).json({
+            success: false,
+            error: 'El texto es requerido para convertir a voz'
+        });
     }
-};
+    
+    console.log(`[TTS] Texto: ${inputText.substring(0, 50)}...`);
+    const audioUrl = await QwenService.textToSpeech(inputText.trim());
+    
+    res.json({
+        success: true,
+        data: audioUrl,
+        type: 'audio'
+    });
+});
 
-exports.handleMultimodal = async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ success: false, error: "Sin archivo" });
-        const response = await QwenService.chatVision(req.file.filename, req.body.prompt || "Describe esto.");
-        res.json({ success: true, data: response });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+/**
+ * POST /api/qwen/audio-stt
+ * Convierte audio a texto (Speech-to-Text)
+ */
+exports.handleAudioToText = asyncHandler(async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({
+            success: false,
+            error: 'No se subió ningún archivo de audio'
+        });
     }
+    
+    const { prompt } = req.body;
+    console.log(`[STT] Archivo: ${req.file.filename}`);
+    
+    const transcription = await QwenService.audioToText(req.file.filename, prompt);
+    
+    res.json({
+        success: true,
+        data: transcription,
+        type: 'text',
+        originalFile: req.file.filename
+    });
+});
+
+/**
+ * POST /api/qwen/multimodal
+ * Análisis de imágenes y documentos con visión
+ */
+exports.handleMultimodal = asyncHandler(async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({
+            success: false,
+            error: 'No se subió ningún archivo para analizar'
+        });
+    }
+    
+    const { prompt } = req.body;
+    const defaultPrompt = 'Analiza y describe este contenido en detalle';
+    
+    console.log(`[MULTIMODAL] Archivo: ${req.file.filename}`);
+    const response = await QwenService.chatVision(
+        req.file.filename,
+        prompt || defaultPrompt
+    );
+    
+    res.json({
+        success: true,
+        data: response,
+        type: 'text',
+        analyzedFile: req.file.filename
+    });
+});
+
+/**
+ * GET /api/qwen/health
+ * Health check del servicio
+ */
+exports.healthCheck = (req, res) => {
+    res.json({
+        success: true,
+        message: 'Qwen API Service is running',
+        timestamp: new Date().toISOString(),
+        endpoints: [
+            'POST /api/qwen/chat - Chat con IA',
+            'POST /api/qwen/generate-image - Generar imagen',
+            'POST /api/qwen/generate-video - Generar video (T2V/I2V)',
+            'POST /api/qwen/tts - Texto a voz',
+            'POST /api/qwen/audio-stt - Audio a texto',
+            'POST /api/qwen/multimodal - Análisis visual'
+        ]
+    });
 };

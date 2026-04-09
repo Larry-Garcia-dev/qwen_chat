@@ -1,12 +1,45 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { pipeline } = require('stream/promises');
 
 const URL_COMPATIBLE = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
 const URL_AIGC = 'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc';
+const URL_AIGC_INTL = 'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc';
+
+// Directorios para organizar uploads
+const UPLOAD_DIRS = {
+    images: 'uploads/images',
+    audio: 'uploads/audio',
+    video: 'uploads/video',
+    documents: 'uploads/documents',
+    generated: 'uploads/generated'
+};
 
 class QwenService {
+    /**
+     * Inicializa los directorios de uploads
+     */
+    static initializeUploadDirs() {
+        Object.values(UPLOAD_DIRS).forEach(dir => {
+            const fullPath = path.join(process.cwd(), dir);
+            if (!fs.existsSync(fullPath)) {
+                fs.mkdirSync(fullPath, { recursive: true });
+                console.log(`[INIT] Directorio creado: ${fullPath}`);
+            }
+        });
+    }
+
+    /**
+     * Obtiene los headers para las peticiones a Dashscope
+     */
     static getHeaders(isAsync = false) {
         const rawApiKey = process.env.DASHSCOPE_API_KEY || '';
         const cleanKey = rawApiKey.replace(/['"]/g, '').trim();
+        
+        if (!cleanKey) {
+            throw new Error('DASHSCOPE_API_KEY no está configurada');
+        }
         
         const headers = {
             'Authorization': `Bearer ${cleanKey}`,
@@ -16,37 +49,119 @@ class QwenService {
         return headers;
     }
 
-    static getPublicUrl(fileName) {
-        const baseUrl = process.env.PUBLIC_URL || 'http://localhost:3000';
-        return `${baseUrl}/uploads/${fileName}`;
+    /**
+     * Genera la URL pública para un archivo
+     */
+    static getPublicUrl(fileName, subDir = '') {
+        const baseUrl = (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
+        const filePath = subDir ? `uploads/${subDir}/${fileName}` : `uploads/${fileName}`;
+        return `${baseUrl}/${filePath}`;
     }
 
-    // 1. CHAT (Qwen 3.6 Plus con "Thinking")
-    static async chat(prompt) {
-        console.log(`\n[API REQUEST] Chat Qwen 3.6 Plus`);
+    /**
+     * Descarga un archivo desde una URL y lo guarda localmente
+     */
+    static async downloadAndSaveFile(url, fileName, subDir = 'generated') {
+        try {
+            const targetDir = path.join(process.cwd(), 'uploads', subDir);
+            if (!fs.existsSync(targetDir)) {
+                fs.mkdirSync(targetDir, { recursive: true });
+            }
+            
+            const filePath = path.join(targetDir, fileName);
+            const response = await axios({
+                method: 'GET',
+                url: url,
+                responseType: 'stream',
+                timeout: 120000 // 2 minutos timeout para archivos grandes
+            });
+            
+            const writer = fs.createWriteStream(filePath);
+            await pipeline(response.data, writer);
+            
+            console.log(`[DOWNLOAD] Archivo guardado: ${filePath}`);
+            return this.getPublicUrl(fileName, subDir);
+        } catch (error) {
+            console.error(`[DOWNLOAD ERROR] ${error.message}`);
+            // Si falla la descarga, retornamos la URL original
+            return url;
+        }
+    }
+
+    /**
+     * Determina el tipo de archivo basándose en su extensión o mimetype
+     */
+    static getFileType(filename, mimetype = '') {
+        const ext = path.extname(filename).toLowerCase();
+        const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
+        const audioExts = ['.mp3', '.wav', '.ogg', '.webm', '.m4a', '.flac'];
+        const videoExts = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
+        const docExts = ['.pdf', '.doc', '.docx', '.txt', '.xls', '.xlsx', '.ppt', '.pptx'];
+        
+        if (imageExts.includes(ext) || mimetype.startsWith('image/')) return 'images';
+        if (audioExts.includes(ext) || mimetype.startsWith('audio/')) return 'audio';
+        if (videoExts.includes(ext) || mimetype.startsWith('video/')) return 'video';
+        if (docExts.includes(ext)) return 'documents';
+        return 'documents';
+    }
+
+    // ==========================================
+    // 1. CHAT (Qwen Plus con Thinking)
+    // ==========================================
+    static async chat(prompt, enableThinking = true) {
+        console.log(`\n[API REQUEST] Chat Qwen Plus`);
+        console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
+        
+        if (!prompt || typeof prompt !== 'string') {
+            throw new Error('El prompt es requerido y debe ser texto');
+        }
+
         const payload = {
-            model: "qwen3.6-plus",
+            model: "qwen-plus",
             messages: [{ role: "user", content: prompt }],
-            stream: false, // Usamos false para simplificar la respuesta HTTP
-            enable_thinking: true
+            stream: false,
+            enable_thinking: enableThinking
         };
-        const response = await axios.post(`${URL_COMPATIBLE}/chat/completions`, payload, { headers: this.getHeaders() });
-        return response.data.choices[0].message.content;
+
+        try {
+            const response = await axios.post(
+                `${URL_COMPATIBLE}/chat/completions`, 
+                payload, 
+                { headers: this.getHeaders(), timeout: 60000 }
+            );
+            
+            const content = response.data?.choices?.[0]?.message?.content;
+            if (!content) {
+                throw new Error('Respuesta vacía del modelo');
+            }
+            
+            console.log(`[RESPONSE] Chat completado exitosamente`);
+            return content;
+        } catch (error) {
+            console.error(`[ERROR] Chat: ${error.message}`);
+            throw new Error(`Error en chat: ${error.response?.data?.error?.message || error.message}`);
+        }
     }
 
-    // 2. TEXT TO VIDEO / IMAGE TO VIDEO (Wan 2.6)
+    // ==========================================
+    // 2. GENERACION DE VIDEO (Wan 2.6 T2V/I2V)
+    // ==========================================
     static async generateVideo(prompt, fileName = null) {
         console.log(`\n[API REQUEST] Video (Wan 2.6) - Iniciando tarea...`);
         const isI2V = !!fileName;
+        console.log(`[MODE] ${isI2V ? 'Image-to-Video' : 'Text-to-Video'}`);
         
+        if (!prompt && !isI2V) {
+            throw new Error('Se requiere un prompt para generar video');
+        }
+
         const payload = {
-            model: isI2V ? "wan2.6-i2v" : "wan2.6-t2v",
-            input: { prompt: prompt },
+            model: isI2V ? "wan2.1-i2v-plus" : "wan2.1-t2v-plus",
+            input: { prompt: prompt || "Create a cinematic video" },
             parameters: {
                 prompt_extend: true,
-                duration: 5, // Reducido a 5s para pruebas más rápidas, cámbialo a 10 si quieres
-                audio: true,
-                shot_type: "multi"
+                duration: 5,
+                audio: true
             }
         };
 
@@ -57,72 +172,301 @@ class QwenService {
             payload.parameters.size = "1280*720";
         }
 
-        // Paso A: Enviar la tarea (Asíncrono)
-        const res = await axios.post(`${URL_AIGC}/video-generation/video-synthesis`, payload, { headers: this.getHeaders(true) });
-        const taskId = res.data.output.task_id;
-        console.log(`[TAREA CREADA] ID: ${taskId}. Empezando Polling...`);
-
-        // Paso B: Polling (Preguntar cada 10 segundos si ya terminó)
-        while (true) {
-            await new Promise(r => setTimeout(r, 10000)); 
-            const checkRes = await axios.get(`https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`, { headers: this.getHeaders() });
-            const status = checkRes.data.output.task_status;
-            console.log(`[ESTADO VIDEO] ${status}...`);
+        try {
+            // Paso A: Crear la tarea asíncrona
+            const createRes = await axios.post(
+                `${URL_AIGC}/video-generation/video-synthesis`, 
+                payload, 
+                { headers: this.getHeaders(true), timeout: 30000 }
+            );
             
-            if (status === 'SUCCEEDED') return checkRes.data.output.video_url;
-            if (status === 'FAILED') throw new Error("Error en renderizado: " + JSON.stringify(checkRes.data.output));
+            const taskId = createRes.data?.output?.task_id;
+            if (!taskId) {
+                throw new Error('No se pudo crear la tarea de video');
+            }
+            
+            console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
+
+            // Paso B: Polling hasta que termine
+            let attempts = 0;
+            const maxAttempts = 60; // 10 minutos máximo (60 * 10 segundos)
+            
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 10000)); // Esperar 10 segundos
+                attempts++;
+                
+                const checkRes = await axios.get(
+                    `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`, 
+                    { headers: this.getHeaders(), timeout: 30000 }
+                );
+                
+                const status = checkRes.data?.output?.task_status;
+                console.log(`[POLLING ${attempts}/${maxAttempts}] Estado: ${status}`);
+                
+                if (status === 'SUCCEEDED') {
+                    const videoUrl = checkRes.data.output.video_url;
+                    console.log(`[SUCCESS] Video URL: ${videoUrl}`);
+                    
+                    // Descargar y guardar localmente
+                    const localFileName = `video_${Date.now()}.mp4`;
+                    const localUrl = await this.downloadAndSaveFile(videoUrl, localFileName, 'video');
+                    return localUrl;
+                }
+                
+                if (status === 'FAILED') {
+                    const errorMsg = checkRes.data?.output?.message || 'Error desconocido';
+                    throw new Error(`Renderizado fallido: ${errorMsg}`);
+                }
+            }
+            
+            throw new Error('Timeout: El video tardó demasiado en generarse');
+        } catch (error) {
+            console.error(`[ERROR] Video: ${error.message}`);
+            throw new Error(`Error generando video: ${error.response?.data?.error?.message || error.message}`);
         }
     }
 
-    // 3. GENERACIÓN DE IMÁGENES (z-image-turbo)
+    // ==========================================
+    // 3. GENERACION DE IMAGENES (Flux)
+    // ==========================================
     static async generateImage(prompt) {
-        console.log(`\n[API REQUEST] Creando Imagen (z-image-turbo)`);
+        console.log(`\n[API REQUEST] Generando Imagen`);
+        console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
+        
+        if (!prompt || typeof prompt !== 'string') {
+            throw new Error('El prompt es requerido para generar imagen');
+        }
+
         const payload = {
-            model: "z-image-turbo",
-            input: { messages: [{ role: "user", content: [{ text: prompt }] }] },
-            parameters: { prompt_extend: false, size: "1024*1024" }
+            model: "flux-schnell",
+            input: {
+                prompt: prompt
+            },
+            parameters: {
+                size: "1024*1024",
+                n: 1
+            }
         };
-        const response = await axios.post(`${URL_AIGC}/multimodal-generation/generation`, payload, { headers: this.getHeaders() });
-        // Dashscope multimodal devuelve usualmente un array de results
-        return response.data.output.results[0].image_url || JSON.stringify(response.data);
+
+        try {
+            const response = await axios.post(
+                `${URL_AIGC}/text2image/image-synthesis`, 
+                payload, 
+                { headers: this.getHeaders(), timeout: 60000 }
+            );
+            
+            const imageUrl = response.data?.output?.results?.[0]?.url 
+                          || response.data?.output?.results?.[0]?.image_url
+                          || response.data?.output?.url;
+            
+            if (!imageUrl) {
+                console.log(`[DEBUG] Response: ${JSON.stringify(response.data)}`);
+                throw new Error('No se pudo obtener la URL de la imagen');
+            }
+            
+            console.log(`[SUCCESS] Image URL: ${imageUrl}`);
+            
+            // Descargar y guardar localmente
+            const localFileName = `image_${Date.now()}.png`;
+            const localUrl = await this.downloadAndSaveFile(imageUrl, localFileName, 'images');
+            return localUrl;
+        } catch (error) {
+            console.error(`[ERROR] Image: ${error.message}`);
+            throw new Error(`Error generando imagen: ${error.response?.data?.error?.message || error.message}`);
+        }
     }
 
-    // 4. TEXT TO SPEECH (qwen3-tts)
+    // ==========================================
+    // 4. TEXT TO SPEECH (CosyVoice)
+    // ==========================================
     static async textToSpeech(text) {
-        console.log(`\n[API REQUEST] Texto a Voz (qwen3-tts)`);
+        console.log(`\n[API REQUEST] Text to Speech`);
+        console.log(`[TEXT] ${text.substring(0, 100)}...`);
+        
+        if (!text || typeof text !== 'string') {
+            throw new Error('El texto es requerido para TTS');
+        }
+
         const payload = {
-            model: "qwen3-tts-flash-2025-11-27",
-            input: { text: text },
-            parameters: { voice: "Cherry" }
+            model: "cosyvoice-v1",
+            input: {
+                text: text
+            },
+            parameters: {
+                voice: "longxiaochun",
+                format: "mp3",
+                sample_rate: 22050
+            }
         };
-        // Nota: A veces esta API retorna binario, ajustamos responseType si es necesario
-        const response = await axios.post(`https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`, payload, { headers: this.getHeaders() });
-        return response.data; // Enviamos la data cruda al frontend para evaluarla
+
+        try {
+            const response = await axios.post(
+                `${URL_AIGC_INTL}/speech-synthesis/synthesis`, 
+                payload, 
+                { headers: this.getHeaders(), timeout: 60000 }
+            );
+            
+            const audioUrl = response.data?.output?.audio_url 
+                          || response.data?.output?.url
+                          || response.data?.output?.results?.[0]?.audio_url;
+            
+            if (!audioUrl) {
+                console.log(`[DEBUG] TTS Response: ${JSON.stringify(response.data)}`);
+                // Algunos modelos retornan audio en base64
+                if (response.data?.output?.audio) {
+                    // Guardar base64 como archivo
+                    const localFileName = `tts_${Date.now()}.mp3`;
+                    const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
+                    fs.writeFileSync(filePath, Buffer.from(response.data.output.audio, 'base64'));
+                    return this.getPublicUrl(localFileName, 'audio');
+                }
+                throw new Error('No se pudo obtener el audio generado');
+            }
+            
+            console.log(`[SUCCESS] Audio URL: ${audioUrl}`);
+            
+            // Descargar y guardar localmente
+            const localFileName = `tts_${Date.now()}.mp3`;
+            const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
+            return localUrl;
+        } catch (error) {
+            console.error(`[ERROR] TTS: ${error.message}`);
+            throw new Error(`Error en TTS: ${error.response?.data?.error?.message || error.message}`);
+        }
     }
 
-    // 5. AUDIO TO TEXT (qwen2-audio-7b)
-    static async audioToText(fileName, prompt) {
-        console.log(`\n[API REQUEST] Audio a Texto (qwen2-audio)`);
+    // ==========================================
+    // 5. AUDIO TO TEXT (Paraformer)
+    // ==========================================
+    static async audioToText(fileName, prompt = '') {
+        console.log(`\n[API REQUEST] Audio to Text (Paraformer)`);
+        console.log(`[FILE] ${fileName}`);
+        
+        if (!fileName) {
+            throw new Error('Se requiere un archivo de audio');
+        }
+
         const fileUrl = this.getPublicUrl(fileName);
+        console.log(`[FILE URL] ${fileUrl}`);
+
         const payload = {
-            model: "qwen2-audio-7b-instruct",
-            input: { audio: fileUrl, text: prompt || "Transcribe este audio detalladamente" }
+            model: "paraformer-v2",
+            input: {
+                file_urls: [fileUrl]
+            },
+            parameters: {
+                language_hints: ["es", "en"]
+            }
         };
-        const response = await axios.post(`https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`, payload, { headers: this.getHeaders() });
-        return response.data.output?.text || JSON.stringify(response.data);
+
+        try {
+            // Crear tarea asíncrona
+            const createRes = await axios.post(
+                `${URL_AIGC_INTL}/transcription/transcription`,
+                payload,
+                { headers: this.getHeaders(true), timeout: 30000 }
+            );
+            
+            const taskId = createRes.data?.output?.task_id;
+            if (!taskId) {
+                throw new Error('No se pudo crear la tarea de transcripción');
+            }
+            
+            console.log(`[TASK CREATED] ID: ${taskId}`);
+
+            // Polling
+            let attempts = 0;
+            const maxAttempts = 30;
+            
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 3000));
+                attempts++;
+                
+                const checkRes = await axios.get(
+                    `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`,
+                    { headers: this.getHeaders(), timeout: 30000 }
+                );
+                
+                const status = checkRes.data?.output?.task_status;
+                console.log(`[POLLING ${attempts}] Estado: ${status}`);
+                
+                if (status === 'SUCCEEDED') {
+                    const results = checkRes.data?.output?.results;
+                    if (results && results.length > 0) {
+                        const transcription = results[0]?.transcription_url;
+                        if (transcription) {
+                            // Descargar transcripción
+                            const transRes = await axios.get(transcription);
+                            const text = transRes.data?.transcripts?.[0]?.text 
+                                       || transRes.data?.text 
+                                       || JSON.stringify(transRes.data);
+                            return text;
+                        }
+                        return results[0]?.text || JSON.stringify(results);
+                    }
+                    throw new Error('Transcripción vacía');
+                }
+                
+                if (status === 'FAILED') {
+                    throw new Error('Transcripción fallida');
+                }
+            }
+            
+            throw new Error('Timeout en transcripción');
+        } catch (error) {
+            console.error(`[ERROR] STT: ${error.message}`);
+            throw new Error(`Error en transcripción: ${error.response?.data?.error?.message || error.message}`);
+        }
     }
 
-    // 6. VISIÓN Y DOCUMENTOS (qwen-vl-plus)
-    static async chatVision(fileName, prompt) {
-        console.log(`\n[API REQUEST] Analizando Documento/Imagen (qwen-vl-plus)`);
+    // ==========================================
+    // 6. VISION - Análisis de Imágenes/Documentos
+    // ==========================================
+    static async chatVision(fileName, prompt = 'Describe esta imagen en detalle') {
+        console.log(`\n[API REQUEST] Vision (qwen-vl-max)`);
+        console.log(`[FILE] ${fileName}`);
+        console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
+        
+        if (!fileName) {
+            throw new Error('Se requiere un archivo para análisis visual');
+        }
+
         const fileUrl = this.getPublicUrl(fileName);
+        console.log(`[FILE URL] ${fileUrl}`);
+
         const payload = {
-            model: "qwen-vl-plus",
-            messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: fileUrl } }, { type: "text", text: prompt }] }]
+            model: "qwen-vl-max",
+            messages: [{
+                role: "user",
+                content: [
+                    { type: "image_url", image_url: { url: fileUrl } },
+                    { type: "text", text: prompt }
+                ]
+            }]
         };
-        const response = await axios.post(`${URL_COMPATIBLE}/chat/completions`, payload, { headers: this.getHeaders() });
-        return response.data.choices[0].message.content;
+
+        try {
+            const response = await axios.post(
+                `${URL_COMPATIBLE}/chat/completions`,
+                payload,
+                { headers: this.getHeaders(), timeout: 90000 }
+            );
+            
+            const content = response.data?.choices?.[0]?.message?.content;
+            if (!content) {
+                throw new Error('Respuesta vacía del modelo de visión');
+            }
+            
+            console.log(`[SUCCESS] Vision analysis completed`);
+            return content;
+        } catch (error) {
+            console.error(`[ERROR] Vision: ${error.message}`);
+            throw new Error(`Error en análisis visual: ${error.response?.data?.error?.message || error.message}`);
+        }
     }
 }
+
+// Inicializar directorios al cargar el módulo
+QwenService.initializeUploadDirs();
 
 module.exports = QwenService;

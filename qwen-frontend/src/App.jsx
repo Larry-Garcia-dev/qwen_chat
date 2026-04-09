@@ -1,74 +1,218 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/qwen';
 
-const MODELS = [
-  { id: 'qwen-turbo', name: 'Qwen Turbo', description: 'Rápido y eficiente para texto', icon: '⚡' },
-  { id: 'qwen-max', name: 'Qwen Max', description: 'Máximo poder para tareas complejas', icon: '🧠' },
-  { id: 'qwen-vl-plus', name: 'Qwen Vision', description: 'Analiza imágenes y documentos', icon: '👁' },
-  { id: 'qwen-audio-turbo', name: 'Qwen Audio', description: 'Procesa y analiza audio', icon: '🎵' },
+// Modos de operación disponibles
+const MODES = [
+  { id: 'chat', name: 'Chat', description: 'Conversacion inteligente', icon: 'chat' },
+  { id: 'image', name: 'Imagen', description: 'Genera imagenes desde texto', icon: 'image' },
+  { id: 'video', name: 'Video', description: 'Genera video (T2V/I2V)', icon: 'video' },
+  { id: 'tts', name: 'Texto a Voz', description: 'Convierte texto a audio', icon: 'audio' },
+  { id: 'stt', name: 'Voz a Texto', description: 'Transcribe audio', icon: 'mic' },
+  { id: 'vision', name: 'Vision', description: 'Analiza imagenes/documentos', icon: 'eye' },
 ];
 
+// Componente de icono SVG
+const Icon = ({ name, size = 24 }) => {
+  const icons = {
+    chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>,
+    image: <><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></>,
+    video: <><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></>,
+    audio: <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></>,
+    mic: <><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></>,
+    eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+    send: <><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></>,
+    upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></>,
+    x: <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>,
+    stop: <rect x="6" y="6" width="12" height="12" rx="2"/>,
+    settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></>,
+    download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></>,
+  };
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {icons[name]}
+    </svg>
+  );
+};
+
 function App() {
-  const [model, setModel] = useState('qwen-turbo');
+  const [mode, setMode] = useState('chat');
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [showModelSelector, setShowModelSelector] = useState(false);
-  const [urlInput, setUrlInput] = useState('');
-  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [showModeSelector, setShowModeSelector] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  // Auto-scroll al final del chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ACTUALIZACIÓN 1: Agregado el parámetro `isMedia` para saber si es texto o archivo multimedia
-  const addMessage = (content, sender, type = 'text', isMedia = false) => {
-    setMessages((prev) => [...prev, { content, sender, type, isMedia, timestamp: new Date() }]);
+  // Agregar mensaje al historial
+  const addMessage = useCallback((content, sender, type = 'text', mediaType = null) => {
+    setMessages((prev) => [...prev, {
+      id: Date.now(),
+      content,
+      sender,
+      type,
+      mediaType,
+      timestamp: new Date()
+    }]);
+  }, []);
+
+  // Detectar tipo de media desde URL
+  const detectMediaType = (url) => {
+    if (!url || typeof url !== 'string') return null;
+    const lower = url.toLowerCase();
+    if (lower.match(/\.(mp4|webm|mov|avi)($|\?)/)) return 'video';
+    if (lower.match(/\.(mp3|wav|ogg|m4a|flac)($|\?)/)) return 'audio';
+    if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp|svg)($|\?)/)) return 'image';
+    // Si es una URL pero no tiene extension clara, intentar por el path
+    if (lower.includes('/video/') || lower.includes('video_')) return 'video';
+    if (lower.includes('/audio/') || lower.includes('tts_')) return 'audio';
+    if (lower.includes('/image') || lower.includes('image_')) return 'image';
+    return null;
   };
 
+  // Handler principal para enviar mensajes
   const handleSendMessage = async () => {
-    if (!inputText.trim() && !selectedFile) return;
+    if (isLoading) return;
     
-    if (selectedFile) {
-      await handleFileUpload();
+    const text = inputText.trim();
+    const file = selectedFile;
+    
+    // Validaciones segun el modo
+    if (mode === 'chat' && !text) return;
+    if (mode === 'image' && !text) {
+      addMessage('Por favor, escribe una descripcion para la imagen', 'bot', 'error');
+      return;
+    }
+    if (mode === 'video' && !text && !file) {
+      addMessage('Escribe un prompt o sube una imagen para generar video', 'bot', 'error');
+      return;
+    }
+    if (mode === 'tts' && !text) {
+      addMessage('Escribe el texto que deseas convertir a voz', 'bot', 'error');
+      return;
+    }
+    if (mode === 'stt' && !file) {
+      addMessage('Sube un archivo de audio para transcribir', 'bot', 'error');
+      return;
+    }
+    if (mode === 'vision' && !file) {
+      addMessage('Sube una imagen o documento para analizar', 'bot', 'error');
       return;
     }
 
-    addMessage(inputText, 'user');
-    const currentText = inputText;
+    // Mostrar mensaje del usuario
+    const userMsg = file 
+      ? `${file.name}${text ? ` - "${text}"` : ''}` 
+      : text;
+    addMessage(userMsg, 'user', file ? 'file' : 'text');
+    
     setInputText('');
+    setSelectedFile(null);
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: currentText, model: model })
-      });
+      let response;
+      let endpoint;
+      let body;
+
+      switch (mode) {
+        case 'chat':
+          endpoint = '/chat';
+          body = JSON.stringify({ prompt: text });
+          response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body
+          });
+          break;
+
+        case 'image':
+          endpoint = '/generate-image';
+          body = JSON.stringify({ prompt: text });
+          response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body
+          });
+          break;
+
+        case 'video':
+          endpoint = '/generate-video';
+          const videoFormData = new FormData();
+          if (file) videoFormData.append('file', file);
+          videoFormData.append('prompt', text || 'Create a cinematic video');
+          response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            body: videoFormData
+          });
+          break;
+
+        case 'tts':
+          endpoint = '/tts';
+          body = JSON.stringify({ prompt: text });
+          response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body
+          });
+          break;
+
+        case 'stt':
+          endpoint = '/audio-stt';
+          const sttFormData = new FormData();
+          sttFormData.append('file', file);
+          if (text) sttFormData.append('prompt', text);
+          response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            body: sttFormData
+          });
+          break;
+
+        case 'vision':
+          endpoint = '/multimodal';
+          const visionFormData = new FormData();
+          visionFormData.append('file', file);
+          visionFormData.append('prompt', text || 'Describe esta imagen en detalle');
+          response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            body: visionFormData
+          });
+          break;
+
+        default:
+          throw new Error('Modo no soportado');
+      }
+
       const data = await response.json();
       
       if (data.success) {
-        addMessage(data.data, 'bot');
+        const mediaType = detectMediaType(data.data);
+        addMessage(data.data, 'bot', mediaType ? 'media' : 'text', mediaType);
       } else {
-        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
+        addMessage(`Error: ${data.error || 'Error desconocido'}`, 'bot', 'error');
       }
     } catch (error) {
-      addMessage(`Error de conexión: ${error.message}`, 'bot', 'error');
+      console.error('Error:', error);
+      addMessage(`Error de conexion: ${error.message}`, 'bot', 'error');
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Manejar Enter para enviar
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -76,221 +220,40 @@ function App() {
     }
   };
 
-  // ACTUALIZACIÓN 2: Lógica adaptada para recibir y mostrar la URL de la imagen
-  const handleGenerateImage = async () => {
-    if (!inputText.trim()) {
-      addMessage('Por favor, escribe una descripción para la imagen', 'bot', 'error');
-      return;
-    }
-    
-    addMessage(`Generando imagen: "${inputText}"`, 'user');
-    setIsLoading(true);
-    
-    try {
-      const response = await fetch(`${API_URL}/generate-image`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: inputText })
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        const isUrl = typeof data.data === 'string' && data.data.startsWith('http');
-        addMessage(data.data, 'bot', 'text', isUrl);
-      } else {
-        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
-      }
-    } catch (error) {
-      addMessage(`Error: ${error.message}`, 'bot', 'error');
-    } finally {
-      setIsLoading(false);
-      setInputText('');
-    }
-  };
-
-  // ACTUALIZACIÓN 3: Nueva función para Generación de Video (Wan 2.6)
-  const handleGenerateVideo = async () => {
-    if (!inputText.trim() && !selectedFile) {
-      addMessage('Por favor, escribe un prompt o sube una imagen base para el video', 'bot', 'error');
-      return;
-    }
-
-    addMessage(`Generando video (Wan 2.6)... Esto puede tardar 1-2 minutos.`, 'user');
-    setIsLoading(true);
-
-    const formData = new FormData();
-    if (selectedFile) formData.append('file', selectedFile);
-    formData.append('prompt', inputText);
-
-    try {
-      const response = await fetch(`${API_URL}/generate-video`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        addMessage(data.data, 'bot', 'text', true); // Se asume que retorna URL
-      } else {
-        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
-      }
-    } catch (error) {
-      addMessage(`Error: ${error.message}`, 'bot', 'error');
-    } finally {
-      setIsLoading(false);
-      setInputText('');
-      setSelectedFile(null);
-    }
-  };
-
-  // ACTUALIZACIÓN 4: Nueva función para Text-To-Speech
-  const handleTTS = async () => {
-    if (!inputText.trim()) {
-      addMessage('Escribe el texto que deseas convertir a voz', 'bot', 'error');
-      return;
-    }
-
-    addMessage(`Convirtiendo a voz: "${inputText}"`, 'user');
-    setIsLoading(true);
-
-    try {
-      const response = await fetch(`${API_URL}/tts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: inputText })
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        // Ajustamos la estructura según la API de Alibaba
-        const audioUrl = data.data?.output?.results?.[0]?.audio_url || data.data?.output?.url || JSON.stringify(data.data);
-        const isUrl = typeof audioUrl === 'string' && audioUrl.startsWith('http');
-        addMessage(audioUrl, 'bot', 'text', isUrl);
-      } else {
-        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
-      }
-    } catch (error) {
-      addMessage(`Error: ${error.message}`, 'bot', 'error');
-    } finally {
-      setIsLoading(false);
-      setInputText('');
-    }
-  };
-
+  // Grabacion de audio
   const toggleRecording = async () => {
     if (!isRecording) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorderRef.current = new MediaRecorder(stream);
+        mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
         audioChunksRef.current = [];
 
         mediaRecorderRef.current.ondataavailable = (event) => {
-          audioChunksRef.current.push(event.data);
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
         };
 
         mediaRecorderRef.current.onstop = async () => {
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          await sendAudioToServer(audioBlob);
+          const audioFile = new File([audioBlob], `recording_${Date.now()}.webm`, { type: 'audio/webm' });
+          setSelectedFile(audioFile);
+          setMode('stt'); // Cambiar a modo STT automaticamente
           stream.getTracks().forEach(track => track.stop());
         };
 
         mediaRecorderRef.current.start();
         setIsRecording(true);
       } catch (error) {
-        addMessage("Error al acceder al micrófono: " + error.message, 'bot', 'error');
+        addMessage(`Error al acceder al microfono: ${error.message}`, 'bot', 'error');
       }
     } else {
-      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current?.stop();
       setIsRecording(false);
     }
   };
 
-  const sendAudioToServer = async (audioBlob) => {
-    addMessage("Procesando audio...", 'user', 'audio');
-    setIsLoading(true);
-    const formData = new FormData();
-    formData.append('audio', audioBlob, 'grabacion.webm');
-
-    try {
-      const response = await fetch(`${API_URL}/audio-stt`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await response.json();
-      addMessage(data.data || "Audio procesado correctamente", 'bot');
-    } catch (error) {
-      addMessage(`Error subiendo audio: ${error.message}`, 'bot', 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleFileUpload = async () => {
-    if (!selectedFile) return;
-
-    const promptToSend = inputText || 'Analiza este archivo en detalle';
-    
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('prompt', promptToSend);
-
-    addMessage(`Archivo: ${selectedFile.name}${inputText ? ` - "${inputText}"` : ''}`, 'user', 'file');
-    setInputText('');
-    setIsLoading(true);
-
-    try {
-      const response = await fetch(`${API_URL}/multimodal`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        addMessage(data.data, 'bot');
-      } else {
-        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
-      }
-    } catch (error) {
-      addMessage(`Error de conexión: ${error.message}`, 'bot', 'error');
-    } finally {
-      setIsLoading(false);
-      setSelectedFile(null);
-    }
-  };
-
-  const handleUrlSubmit = async () => {
-    if (!urlInput.trim()) return;
-    
-    addMessage(`URL: ${urlInput}`, 'user', 'url');
-    const promptToSend = inputText || 'Analiza el contenido de esta URL';
-    setIsLoading(true);
-
-    try {
-      const response = await fetch(`${API_URL}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          prompt: `${promptToSend}\n\nURL a analizar: ${urlInput}`, 
-          model: model 
-        })
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        addMessage(data.data, 'bot');
-      } else {
-        addMessage(`Error: ${JSON.stringify(data.error)}`, 'bot', 'error');
-      }
-    } catch (error) {
-      addMessage(`Error: ${error.message}`, 'bot', 'error');
-    } finally {
-      setIsLoading(false);
-      setUrlInput('');
-      setShowUrlInput(false);
-      setInputText('');
-    }
-  };
-
+  // Drag and drop handlers
   const handleDragOver = (e) => {
     e.preventDefault();
     setIsDragging(true);
@@ -304,10 +267,26 @@ function App() {
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
-    
     const files = e.dataTransfer.files;
     if (files.length > 0) {
-      setSelectedFile(files[0]);
+      handleFileSelect(files[0]);
+    }
+  };
+
+  // Seleccion de archivo
+  const handleFileSelect = (file) => {
+    setSelectedFile(file);
+    // Auto-detectar modo basado en el tipo de archivo
+    const type = file.type;
+    if (type.startsWith('audio/')) {
+      setMode('stt');
+    } else if (type.startsWith('image/') || type.startsWith('video/')) {
+      // Podria ser vision o video (I2V)
+      if (!['video', 'vision'].includes(mode)) {
+        setMode('vision');
+      }
+    } else {
+      setMode('vision'); // Documentos
     }
   };
 
@@ -318,29 +297,107 @@ function App() {
     }
   };
 
-  const currentModel = MODELS.find(m => m.id === model);
+  // Renderizar contenido de mensaje
+  const renderMessageContent = (msg) => {
+    if (msg.type === 'error') {
+      return <p className="error-text">{msg.content}</p>;
+    }
+
+    if (msg.type === 'media' && msg.mediaType) {
+      switch (msg.mediaType) {
+        case 'video':
+          return (
+            <div className="media-container">
+              <video src={msg.content} controls playsInline className="media-video" />
+              <a href={msg.content} download className="download-link" target="_blank" rel="noopener noreferrer">
+                <Icon name="download" size={16} /> Descargar video
+              </a>
+            </div>
+          );
+        case 'audio':
+          return (
+            <div className="media-container">
+              <audio src={msg.content} controls className="media-audio" />
+              <a href={msg.content} download className="download-link" target="_blank" rel="noopener noreferrer">
+                <Icon name="download" size={16} /> Descargar audio
+              </a>
+            </div>
+          );
+        case 'image':
+          return (
+            <div className="media-container">
+              <img src={msg.content} alt="Imagen generada" className="media-image" loading="lazy" />
+              <a href={msg.content} download className="download-link" target="_blank" rel="noopener noreferrer">
+                <Icon name="download" size={16} /> Descargar imagen
+              </a>
+            </div>
+          );
+        default:
+          return <p>{msg.content}</p>;
+      }
+    }
+
+    // Texto normal con formato
+    return <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>;
+  };
+
+  const currentMode = MODES.find(m => m.id === mode);
+
+  // Helper para obtener placeholder segun modo
+  const getPlaceholder = () => {
+    switch (mode) {
+      case 'chat': return 'Escribe tu mensaje...';
+      case 'image': return 'Describe la imagen que quieres generar...';
+      case 'video': return 'Describe el video o sube una imagen base...';
+      case 'tts': return 'Escribe el texto para convertir a voz...';
+      case 'stt': return 'Sube un audio o graba con el microfono...';
+      case 'vision': return 'Pregunta sobre la imagen o documento...';
+      default: return 'Escribe algo...';
+    }
+  };
+
+  // Determinar si el boton de enviar debe estar activo
+  const canSend = () => {
+    if (isLoading) return false;
+    const text = inputText.trim();
+    switch (mode) {
+      case 'chat':
+      case 'image':
+      case 'tts':
+        return text.length > 0;
+      case 'video':
+        return text.length > 0 || selectedFile;
+      case 'stt':
+      case 'vision':
+        return selectedFile !== null;
+      default:
+        return false;
+    }
+  };
 
   return (
     <div className="app-container">
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="logo-container">
-          <img src="/logo.png" alt="Macondo Magic Softwares" className="logo" />
+          <img src="/logo.png" alt="Macondo" className="logo" />
         </div>
         
-        <div className="model-section">
-          <h3>Modelo AI</h3>
-          <div className="model-cards">
-            {MODELS.map((m) => (
+        <div className="mode-section">
+          <h3>Modo de Operacion</h3>
+          <div className="mode-cards">
+            {MODES.map((m) => (
               <button
                 key={m.id}
-                className={`model-card ${model === m.id ? 'active' : ''}`}
-                onClick={() => setModel(m.id)}
+                className={`mode-card ${mode === m.id ? 'active' : ''}`}
+                onClick={() => setMode(m.id)}
               >
-                <span className="model-icon">{m.icon}</span>
-                <div className="model-info">
-                  <span className="model-name">{m.name}</span>
-                  <span className="model-desc">{m.description}</span>
+                <span className="mode-icon">
+                  <Icon name={m.icon} size={20} />
+                </span>
+                <div className="mode-info">
+                  <span className="mode-name">{m.name}</span>
+                  <span className="mode-desc">{m.description}</span>
                 </div>
               </button>
             ))}
@@ -349,6 +406,7 @@ function App() {
 
         <div className="sidebar-footer">
           <p>Powered by Qwen AI</p>
+          <p className="api-status">API: {API_URL.replace('/api/qwen', '')}</p>
         </div>
       </aside>
 
@@ -357,39 +415,40 @@ function App() {
         <header className="chat-header">
           <div className="header-info">
             <h1>Macondo Chat</h1>
-            <span className="current-model">
-              {currentModel?.icon} {currentModel?.name}
+            <span className="current-mode">
+              <Icon name={currentMode?.icon} size={16} />
+              {currentMode?.name}
             </span>
           </div>
           <button 
-            className="mobile-model-btn"
-            onClick={() => setShowModelSelector(!showModelSelector)}
+            className="mobile-mode-btn"
+            onClick={() => setShowModeSelector(!showModeSelector)}
+            aria-label="Seleccionar modo"
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
+            <Icon name="settings" size={24} />
           </button>
         </header>
 
-        {showModelSelector && (
-          <div className="mobile-model-selector">
-            {MODELS.map((m) => (
+        {/* Mobile mode selector */}
+        {showModeSelector && (
+          <div className="mobile-mode-selector">
+            {MODES.map((m) => (
               <button
                 key={m.id}
-                className={`mobile-model-option ${model === m.id ? 'active' : ''}`}
+                className={`mobile-mode-option ${mode === m.id ? 'active' : ''}`}
                 onClick={() => {
-                  setModel(m.id);
-                  setShowModelSelector(false);
+                  setMode(m.id);
+                  setShowModeSelector(false);
                 }}
               >
-                <span>{m.icon}</span>
+                <Icon name={m.icon} size={16} />
                 <span>{m.name}</span>
               </button>
             ))}
           </div>
         )}
 
+        {/* Chat messages area */}
         <div 
           className={`chat-messages ${isDragging ? 'dragging' : ''}`}
           onDragOver={handleDragOver}
@@ -399,12 +458,8 @@ function App() {
           {isDragging && (
             <div className="drop-overlay">
               <div className="drop-content">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <p>Suelta el archivo aquí</p>
+                <Icon name="upload" size={48} />
+                <p>Suelta el archivo aqui</p>
               </div>
             </div>
           )}
@@ -413,12 +468,20 @@ function App() {
             <div className="empty-chat">
               <img src="/logo.png" alt="Macondo" className="empty-logo" />
               <h2>Bienvenido a Macondo Chat</h2>
-              <p>Escribe un mensaje, sube un archivo o graba audio para comenzar</p>
+              <p>Selecciona un modo y comienza a crear</p>
+              <div className="quick-actions">
+                {MODES.slice(0, 4).map((m) => (
+                  <button key={m.id} onClick={() => setMode(m.id)}>
+                    <Icon name={m.icon} size={16} />
+                    {m.name}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
-            messages.map((msg, index) => (
+            messages.map((msg) => (
               <div 
-                key={index} 
+                key={msg.id} 
                 className={`message ${msg.sender} ${msg.type === 'error' ? 'error' : ''}`}
               >
                 {msg.sender === 'bot' && (
@@ -427,19 +490,7 @@ function App() {
                   </div>
                 )}
                 <div className="message-content">
-                  {/* ACTUALIZACIÓN 5: Lógica de renderizado Visual de Medios (Videos, Audios e Imágenes) */}
-                  {msg.isMedia && typeof msg.content === 'string' ? (
-                      msg.content.match(/\.(mp4|webm|mov)$/i) ? (
-                        <video src={msg.content} controls style={{ maxWidth: '100%', borderRadius: '8px' }} />
-                      ) : msg.content.match(/\.(mp3|wav|ogg)$/i) ? (
-                        <audio src={msg.content} controls style={{ maxWidth: '100%' }} />
-                      ) : (
-                        <img src={msg.content} alt="Media generada" style={{ maxWidth: '100%', borderRadius: '8px' }} />
-                      )
-                  ) : (
-                      <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
-                  )}
-                  
+                  {renderMessageContent(msg)}
                   <span className="message-time">
                     {msg.timestamp.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                   </span>
@@ -448,6 +499,7 @@ function App() {
             ))
           )}
           
+          {/* Loading indicator */}
           {isLoading && (
             <div className="message bot loading">
               <div className="message-avatar bot-avatar">
@@ -457,6 +509,13 @@ function App() {
                 <div className="typing-indicator">
                   <span></span><span></span><span></span>
                 </div>
+                <span className="loading-text">
+                  {mode === 'video' ? 'Generando video (puede tardar 1-2 min)...' : 
+                   mode === 'image' ? 'Generando imagen...' :
+                   mode === 'tts' ? 'Convirtiendo a voz...' :
+                   mode === 'stt' ? 'Transcribiendo audio...' :
+                   'Procesando...'}
+                </span>
               </div>
             </div>
           )}
@@ -464,65 +523,77 @@ function App() {
           <div ref={chatEndRef} />
         </div>
 
+        {/* Input area */}
         <div className="input-area">
+          {/* File preview */}
           {selectedFile && (
             <div className="file-preview">
               <div className="file-info">
-                <span>{selectedFile.name}</span>
+                <Icon name="upload" size={16} />
+                <span className="file-name">{selectedFile.name}</span>
                 <span className="file-size">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
               </div>
-              <button className="remove-file" onClick={removeFile}>X</button>
+              <button className="remove-file" onClick={removeFile} aria-label="Eliminar archivo">
+                <Icon name="x" size={16} />
+              </button>
             </div>
           )}
 
+          {/* Input row */}
           <div className="input-row">
+            {/* Action buttons */}
             <div className="action-buttons">
-              <button className="action-btn" onClick={() => fileInputRef.current?.click()} title="Subir archivo">
-                📁
+              <button 
+                className="action-btn" 
+                onClick={() => fileInputRef.current?.click()} 
+                title="Subir archivo"
+                disabled={isLoading}
+              >
+                <Icon name="upload" size={20} />
               </button>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*, audio/*, .pdf, .doc, .docx, .txt"
-                onChange={(e) => setSelectedFile(e.target.files[0])}
+                accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.txt"
+                onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
                 style={{ display: 'none' }}
               />
-              <button className={`action-btn record-btn ${isRecording ? 'recording' : ''}`} onClick={toggleRecording} title="Grabar audio">
-                {isRecording ? "⏹" : "🎤"}
+              <button 
+                className={`action-btn record-btn ${isRecording ? 'recording' : ''}`} 
+                onClick={toggleRecording} 
+                title={isRecording ? 'Detener grabacion' : 'Grabar audio'}
+                disabled={isLoading}
+              >
+                <Icon name={isRecording ? 'stop' : 'mic'} size={20} />
               </button>
             </div>
 
+            {/* Text input */}
             <div className="text-input-container">
               <textarea
-                placeholder="Escribe tu mensaje o prompt..."
+                placeholder={getPlaceholder()}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyPress={handleKeyPress}
                 rows="1"
+                disabled={isLoading}
               />
             </div>
 
-            {/* ACTUALIZACIÓN 6: Agregados los botones de enviar para Imagen, Video y Voz */}
-            <div className="send-buttons" style={{ display: 'flex', gap: '5px' }}>
-              <button className="send-btn primary" onClick={handleSendMessage} disabled={isLoading || (!inputText.trim() && !selectedFile)} title="Enviar Chat/Análisis">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="22" y1="2" x2="11" y2="13"/>
-                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                </svg>
-              </button>
-              
-              <button className="send-btn secondary" onClick={handleGenerateImage} disabled={isLoading || !inputText.trim()} title="Generar Imagen">
-                🖼️
-              </button>
+            {/* Send button */}
+            <button 
+              className="send-btn primary" 
+              onClick={handleSendMessage} 
+              disabled={!canSend()}
+              title="Enviar"
+            >
+              <Icon name="send" size={20} />
+            </button>
+          </div>
 
-              <button className="send-btn secondary" onClick={handleGenerateVideo} disabled={isLoading || (!inputText.trim() && !selectedFile)} title="Generar Video (T2V/I2V)">
-                🎬
-              </button>
-
-              <button className="send-btn secondary" onClick={handleTTS} disabled={isLoading || !inputText.trim()} title="Texto a Voz (TTS)">
-                🗣️
-              </button>
-            </div>
+          {/* Mode hint */}
+          <div className="mode-hint">
+            Modo: <strong>{currentMode?.name}</strong> - {currentMode?.description}
           </div>
         </div>
       </main>
