@@ -415,7 +415,8 @@ class QwenService {
     }
 
     // ==========================================
-    // 4. TEXT TO SPEECH (CosyVoice v3 - WebSocket/HTTP)
+    // 4. TEXT TO SPEECH (CosyVoice v3 - HTTP API)
+    // Endpoint: /api/v1/services/audio/tts/SpeechSynthesizer
     // ==========================================
     static async textToSpeech(text) {
         console.log(`\n[API REQUEST] Text to Speech (CosyVoice v3)`);
@@ -425,102 +426,67 @@ class QwenService {
             throw new Error('El texto es requerido para TTS');
         }
 
-        // Modelo internacional: cosyvoice-v3-flash con voz longanyang
+        // Payload correcto para CosyVoice TTS HTTP API
+        // voice va dentro de input, no en parameters
         const payload = {
             model: "cosyvoice-v3-flash",
             input: {
-                text: text
-            },
-            parameters: {
+                text: text,
                 voice: "longanyang",
                 format: "mp3",
                 sample_rate: 22050
             }
         };
 
+        // Endpoint correcto para TTS internacional
+        const TTS_URL = 'https://dashscope-intl.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer';
+
         try {
-            // Crear tarea asíncrona
+            // Llamada sincrona (no async) para TTS
             const createRes = await axios.post(
-                `${URL_AIGC_INTL}/speech-synthesis/synthesis`, 
+                TTS_URL, 
                 payload, 
-                { headers: this.getHeaders(true), timeout: 30000 }
+                { headers: this.getHeaders(), timeout: 60000 }
             );
             
-            const taskId = createRes.data?.output?.task_id;
+            console.log(`[DEBUG] TTS Response: ${JSON.stringify(createRes.data)}`);
             
-            // Si hay respuesta directa (sin task_id), procesarla
-            if (!taskId) {
-                const audioUrl = createRes.data?.output?.audio_url 
-                              || createRes.data?.output?.url;
-                const audioBase64 = createRes.data?.output?.audio;
+            // El nuevo formato de respuesta tiene output.audio.url o output.audio.data
+            const audioOutput = createRes.data?.output?.audio;
+            const finishReason = createRes.data?.output?.finish_reason;
+            
+            if (finishReason === 'stop' && audioOutput) {
+                // La respuesta contiene URL del audio generado
+                const audioUrl = audioOutput.url;
+                const audioData = audioOutput.data;
                 
-                if (audioBase64) {
+                if (audioData && audioData.length > 0) {
+                    // Audio en base64
                     const localFileName = `tts_${Date.now()}.mp3`;
                     const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
-                    fs.writeFileSync(filePath, Buffer.from(audioBase64, 'base64'));
+                    fs.writeFileSync(filePath, Buffer.from(audioData, 'base64'));
                     console.log(`[SUCCESS] Audio guardado desde base64`);
                     return this.getPublicUrl(localFileName, 'audio');
                 }
                 
                 if (audioUrl) {
+                    console.log(`[SUCCESS] Audio URL: ${audioUrl}`);
                     const localFileName = `tts_${Date.now()}.mp3`;
                     const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
                     return localUrl;
                 }
-                
-                console.log(`[DEBUG] TTS Response: ${JSON.stringify(createRes.data)}`);
-                throw new Error('No se pudo obtener audio de la respuesta directa');
             }
             
-            console.log(`[TASK CREATED] ID: ${taskId}. Iniciando polling...`);
-
-            // Polling hasta que termine
-            let attempts = 0;
-            const maxAttempts = 30;
-            
-            while (attempts < maxAttempts) {
-                await new Promise(r => setTimeout(r, 2000));
-                attempts++;
-                
-                const checkRes = await axios.get(
-                    `https://dashscope-intl.aliyuncs.com/api/v1/tasks/${taskId}`,
-                    { headers: this.getHeaders(), timeout: 30000 }
-                );
-                
-                const status = checkRes.data?.output?.task_status;
-                console.log(`[POLLING ${attempts}/${maxAttempts}] Estado: ${status}`);
-                
-                if (status === 'SUCCEEDED') {
-                    const audioUrl = checkRes.data?.output?.audio_url 
-                                  || checkRes.data?.output?.url;
-                    const audioBase64 = checkRes.data?.output?.audio;
-                    
-                    if (audioBase64) {
-                        const localFileName = `tts_${Date.now()}.mp3`;
-                        const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
-                        fs.writeFileSync(filePath, Buffer.from(audioBase64, 'base64'));
-                        console.log(`[SUCCESS] Audio guardado desde base64`);
-                        return this.getPublicUrl(localFileName, 'audio');
-                    }
-                    
-                    if (audioUrl) {
-                        console.log(`[SUCCESS] Audio URL: ${audioUrl}`);
-                        const localFileName = `tts_${Date.now()}.mp3`;
-                        const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
-                        return localUrl;
-                    }
-                    
-                    console.log(`[DEBUG] TTS Success Response: ${JSON.stringify(checkRes.data)}`);
-                    throw new Error('No se encontró audio en la respuesta');
-                }
-                
-                if (status === 'FAILED') {
-                    const errorMsg = checkRes.data?.output?.message || 'Error desconocido';
-                    throw new Error(`TTS fallido: ${errorMsg}`);
-                }
+            // Fallback: buscar en formato antiguo
+            const legacyAudioUrl = createRes.data?.output?.audio_url || createRes.data?.output?.url;
+            if (legacyAudioUrl) {
+                console.log(`[SUCCESS] Audio URL (legacy): ${legacyAudioUrl}`);
+                const localFileName = `tts_${Date.now()}.mp3`;
+                const localUrl = await this.downloadAndSaveFile(legacyAudioUrl, localFileName, 'audio');
+                return localUrl;
             }
             
-            throw new Error('Timeout: El audio tardó demasiado en generarse');
+            throw new Error('No se pudo obtener audio de la respuesta');
         } catch (error) {
             console.error(`[ERROR] TTS: ${error.message}`);
             if (error.response?.data) {
