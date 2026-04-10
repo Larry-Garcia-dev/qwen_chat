@@ -223,33 +223,73 @@ function App() {
   const toggleRecording = async () => {
     if (!isRecording) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-        audioChunksRef.current = [];
-
-        mediaRecorderRef.current.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
+        // Verificar si mediaDevices esta disponible (requiere HTTPS o localhost)
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          // Intentar fallback para navegadores antiguos
+          const getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+          if (!getUserMedia) {
+            throw new Error('Tu navegador no soporta grabacion de audio. Intenta usar HTTPS o un navegador moderno.');
           }
-        };
-
-        mediaRecorderRef.current.onstop = async () => {
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          const audioFile = new File([audioBlob], `recording_${Date.now()}.webm`, { type: 'audio/webm' });
-          setSelectedFile(audioFile);
-          setMode('stt'); // Cambiar a modo STT automaticamente
-          stream.getTracks().forEach(track => track.stop());
-        };
-
-        mediaRecorderRef.current.start();
-        setIsRecording(true);
+          // Usar el fallback
+          getUserMedia.call(navigator, { audio: true },
+            (stream) => startRecordingWithStream(stream),
+            (error) => { throw error; }
+          );
+          return;
+        }
+        
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        startRecordingWithStream(stream);
       } catch (error) {
-        addMessage(`Error al acceder al microfono: ${error.message}`, 'bot', 'error');
+        let errorMsg = error.message;
+        if (error.name === 'NotAllowedError') {
+          errorMsg = 'Permiso de microfono denegado. Por favor permite el acceso al microfono.';
+        } else if (error.name === 'NotFoundError') {
+          errorMsg = 'No se encontro un microfono. Por favor conecta un microfono.';
+        } else if (error.name === 'NotSupportedError' || !navigator.mediaDevices) {
+          errorMsg = 'La grabacion de audio requiere HTTPS. Accede desde https:// o localhost.';
+        }
+        addMessage(`Error al acceder al microfono: ${errorMsg}`, 'bot', 'error');
       }
     } else {
       mediaRecorderRef.current?.stop();
       setIsRecording(false);
     }
+  };
+
+  // Funcion auxiliar para iniciar grabacion con un stream
+  const startRecordingWithStream = (stream) => {
+    // Detectar el mejor mimeType soportado
+    const mimeTypes = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav'];
+    let selectedMimeType = '';
+    for (const mimeType of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mimeType)) {
+        selectedMimeType = mimeType;
+        break;
+      }
+    }
+    
+    const options = selectedMimeType ? { mimeType: selectedMimeType } : {};
+    mediaRecorderRef.current = new MediaRecorder(stream, options);
+    audioChunksRef.current = [];
+
+    mediaRecorderRef.current.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data);
+      }
+    };
+
+    mediaRecorderRef.current.onstop = async () => {
+      const audioBlob = new Blob(audioChunksRef.current, { type: selectedMimeType || 'audio/webm' });
+      const ext = selectedMimeType?.split('/')[1] || 'webm';
+      const audioFile = new File([audioBlob], `recording_${Date.now()}.${ext}`, { type: audioBlob.type });
+      setSelectedFile(audioFile);
+      setMode('stt'); // Cambiar a modo STT automaticamente
+      stream.getTracks().forEach(track => track.stop());
+    };
+
+    mediaRecorderRef.current.start();
+    setIsRecording(true);
   };
 
   // Drag and drop handlers
