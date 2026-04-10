@@ -695,12 +695,13 @@ class QwenService {
     }
 
     // ==========================================
-    // 7. DOCUMENT ANALYSIS - Usando Qwen-Plus con File Upload API (Internacional)
-    // Soporta: PDF, DOCX, XLSX, PPTX, TXT, CSV, JSON, EPUB, MOBI, MD
-    // Nota: qwen-long solo disponible en China, usamos qwen-plus para internacional
+    // 7. DOCUMENT ANALYSIS - Extraccion local + Qwen-Plus (Internacional)
+    // Soporta: PDF, DOCX, XLSX, PPTX, TXT, CSV, JSON, MD
+    // Nota: qwen-long y file-extract API solo disponibles en China
+    // Solucion: extraer contenido localmente y enviar a qwen-plus
     // ==========================================
     static async analyzeDocument(fileName, prompt = 'Resume el contenido de este documento') {
-        console.log(`\n[API REQUEST] Document Analysis (Qwen-Plus)`);
+        console.log(`\n[API REQUEST] Document Analysis (Local Extract + Qwen-Plus)`);
         console.log(`[FILE] ${fileName}`);
         console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
         
@@ -709,7 +710,7 @@ class QwenService {
         }
 
         const ext = path.extname(fileName).toLowerCase();
-        const supportedDocExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.txt', '.csv', '.json', '.epub', '.mobi', '.md'];
+        const supportedDocExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.txt', '.csv', '.json', '.md'];
         const supportedImageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
         
         // Si es imagen, usar chatVision
@@ -735,20 +736,51 @@ class QwenService {
         }
 
         try {
-            // Paso 1: Subir el archivo a DashScope usando la API de archivos
-            console.log(`[UPLOAD] Subiendo archivo a DashScope...`);
-            const fileId = await this.uploadFileToDashScope(filePath, fileName);
-            console.log(`[UPLOAD SUCCESS] File ID: ${fileId}`);
+            // Paso 1: Extraer contenido del documento localmente
+            console.log(`[EXTRACT] Extrayendo contenido del documento localmente...`);
+            const documentContent = await this.extractDocumentContent(filePath, ext);
+            console.log(`[EXTRACT SUCCESS] Contenido extraido (${documentContent.length} caracteres)`);
 
-            // Paso 2: Esperar a que el archivo sea procesado
-            console.log(`[PROCESSING] Esperando procesamiento del archivo...`);
-            await this.waitForFileProcessing(fileId);
-
-            // Paso 3: Usar Qwen-Plus para analizar el documento (disponible internacionalmente)
+            // Paso 2: Enviar contenido a Qwen-Plus para analisis
             console.log(`[ANALYSIS] Analizando documento con Qwen-Plus...`);
-            const result = await this.chatWithDocument(fileId, prompt);
             
-            return result;
+            // Limitar contenido si es muy largo (qwen-plus tiene limite de ~128k tokens)
+            const maxChars = 100000; // ~25k tokens aprox
+            let contentToAnalyze = documentContent;
+            if (documentContent.length > maxChars) {
+                contentToAnalyze = documentContent.substring(0, maxChars) + '\n\n[... contenido truncado por limite de longitud ...]';
+                console.log(`[WARNING] Documento truncado de ${documentContent.length} a ${maxChars} caracteres`);
+            }
+            
+            const payload = {
+                model: "qwen-plus",
+                messages: [
+                    { 
+                        role: "system", 
+                        content: "Eres un asistente experto en analisis de documentos. Responde en el mismo idioma que el usuario. Analiza el contenido del documento proporcionado y responde las preguntas del usuario de forma precisa y detallada." 
+                    },
+                    { 
+                        role: "user", 
+                        content: `Contenido del documento:\n\n${contentToAnalyze}\n\n---\n\nPregunta/Instruccion del usuario: ${prompt}` 
+                    }
+                ],
+                stream: false
+            };
+
+            const response = await axios.post(
+                `${URL_COMPATIBLE}/chat/completions`,
+                payload,
+                { headers: this.getHeaders(), timeout: 120000 }
+            );
+
+            const content = response.data?.choices?.[0]?.message?.content;
+            if (!content) {
+                throw new Error('Respuesta vacía del modelo');
+            }
+
+            console.log(`[SUCCESS] Document analysis completed`);
+            return content;
+            
         } catch (error) {
             console.error(`[ERROR] Document Analysis: ${error.message}`);
             if (error.response?.data) {
@@ -759,140 +791,95 @@ class QwenService {
     }
 
     /**
-     * Sube un archivo a DashScope usando la API compatible con OpenAI
+     * Extrae el contenido de texto de un documento segun su tipo
      */
-    static async uploadFileToDashScope(filePath, fileName) {
-        const FormData = require('form-data');
-        const formData = new FormData();
-        
-        formData.append('file', fs.createReadStream(filePath), fileName);
-        formData.append('purpose', 'file-extract');
-
-        const response = await axios.post(
-            `${URL_COMPATIBLE}/files`,
-            formData,
-            {
-                headers: {
-                    ...this.getHeaders(),
-                    ...formData.getHeaders()
-                },
-                timeout: 120000 // 2 minutos para archivos grandes
-            }
-        );
-
-        const fileId = response.data?.id;
-        if (!fileId) {
-            throw new Error('No se pudo obtener el ID del archivo subido');
-        }
-
-        return fileId;
-    }
-
-    /**
-     * Espera a que un archivo sea procesado por DashScope
-     */
-    static async waitForFileProcessing(fileId, maxAttempts = 30) {
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            const response = await axios.get(
-                `${URL_COMPATIBLE}/files/${fileId}`,
-                { headers: this.getHeaders(), timeout: 30000 }
-            );
-
-            const status = response.data?.status;
-            console.log(`[FILE STATUS ${attempt + 1}/${maxAttempts}] ${status}`);
-
-            if (status === 'processed') {
-                return true;
-            }
-
-            if (status === 'error' || status === 'failed') {
-                throw new Error(`Error procesando archivo: ${response.data?.status_details || 'Error desconocido'}`);
-            }
-
-            // Esperar 2 segundos antes del siguiente intento
-            await new Promise(r => setTimeout(r, 2000));
-        }
-
-        throw new Error('Timeout esperando procesamiento del archivo');
-    }
-
-    /**
-     * Chat con un documento usando Qwen-Plus y el file-id
-     * Nota: qwen-long no disponible internacionalmente, usamos qwen-plus
-     */
-    static async chatWithDocument(fileId, prompt) {
-        // Primero obtener el contenido extraido del archivo
-        console.log(`[EXTRACT] Obteniendo contenido del archivo...`);
-        const fileContent = await this.getFileContent(fileId);
-        
-        // Usar qwen-plus con el contenido extraido
-        const payload = {
-            model: "qwen-plus",
-            messages: [
-                { 
-                    role: "system", 
-                    content: "Eres un asistente experto en analisis de documentos. Responde en el mismo idioma que el usuario. Analiza el contenido del documento proporcionado y responde las preguntas del usuario de forma precisa y detallada." 
-                },
-                { 
-                    role: "user", 
-                    content: `Contenido del documento:\n\n${fileContent}\n\n---\n\nPregunta/Instruccion del usuario: ${prompt}` 
-                }
-            ],
-            stream: false
-        };
-
-        const response = await axios.post(
-            `${URL_COMPATIBLE}/chat/completions`,
-            payload,
-            { headers: this.getHeaders(), timeout: 120000 }
-        );
-
-        const content = response.data?.choices?.[0]?.message?.content;
-        if (!content) {
-            throw new Error('Respuesta vacía del modelo');
-        }
-
-        console.log(`[SUCCESS] Document analysis completed`);
-        return content;
-    }
-
-    /**
-     * Obtiene el contenido extraido de un archivo procesado
-     */
-    static async getFileContent(fileId) {
-        const response = await axios.get(
-            `${URL_COMPATIBLE}/files/${fileId}/content`,
-            { headers: this.getHeaders(), timeout: 60000 }
-        );
-
-        // El contenido puede venir como texto directo o en un objeto
-        const content = typeof response.data === 'string' 
-            ? response.data 
-            : response.data?.content || JSON.stringify(response.data);
-        
-        if (!content || content.length === 0) {
-            throw new Error('No se pudo extraer contenido del archivo');
-        }
-
-        console.log(`[EXTRACT SUCCESS] Contenido extraido (${content.length} caracteres)`);
-        return content;
-    }
-
-    /**
-     * Elimina un archivo de DashScope (opcional, para limpieza)
-     */
-    static async deleteFileFromDashScope(fileId) {
+    static async extractDocumentContent(filePath, ext) {
         try {
-            await axios.delete(
-                `${URL_COMPATIBLE}/files/${fileId}`,
-                { headers: this.getHeaders(), timeout: 30000 }
-            );
-            console.log(`[CLEANUP] Archivo ${fileId} eliminado`);
-            return true;
+            switch (ext) {
+                case '.txt':
+                case '.md':
+                case '.csv':
+                    return fs.readFileSync(filePath, 'utf-8');
+                    
+                case '.json':
+                    const jsonContent = fs.readFileSync(filePath, 'utf-8');
+                    return JSON.stringify(JSON.parse(jsonContent), null, 2);
+                    
+                case '.pdf':
+                    return await this.extractPdfContent(filePath);
+                    
+                case '.docx':
+                case '.doc':
+                    return await this.extractDocxContent(filePath);
+                    
+                case '.xlsx':
+                case '.xls':
+                    return await this.extractExcelContent(filePath);
+                    
+                case '.pptx':
+                case '.ppt':
+                    return await this.extractPptContent(filePath);
+                    
+                default:
+                    throw new Error(`Extractor no disponible para: ${ext}`);
+            }
         } catch (error) {
-            console.warn(`[CLEANUP WARNING] No se pudo eliminar archivo: ${error.message}`);
-            return false;
+            console.error(`[EXTRACT ERROR] ${error.message}`);
+            throw new Error(`Error extrayendo contenido: ${error.message}`);
         }
+    }
+
+    /**
+     * Extrae texto de un archivo PDF
+     */
+    static async extractPdfContent(filePath) {
+        const pdfParse = require('pdf-parse');
+        const dataBuffer = fs.readFileSync(filePath);
+        const data = await pdfParse(dataBuffer);
+        return data.text || '';
+    }
+
+    /**
+     * Extrae texto de un archivo DOCX/DOC
+     */
+    static async extractDocxContent(filePath) {
+        const mammoth = require('mammoth');
+        const result = await mammoth.extractRawText({ path: filePath });
+        return result.value || '';
+    }
+
+    /**
+     * Extrae texto de un archivo Excel (XLSX/XLS)
+     */
+    static async extractExcelContent(filePath) {
+        const XLSX = require('xlsx');
+        const workbook = XLSX.readFile(filePath);
+        let content = '';
+        
+        for (const sheetName of workbook.SheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const csvData = XLSX.utils.sheet_to_csv(sheet);
+            content += `\n--- Hoja: ${sheetName} ---\n${csvData}\n`;
+        }
+        
+        return content;
+    }
+
+    /**
+     * Extrae texto de un archivo PowerPoint (PPTX/PPT)
+     */
+    static async extractPptContent(filePath) {
+        // Para PPTX usamos officeparser que soporta multiples formatos
+        const officeParser = require('officeparser');
+        return new Promise((resolve, reject) => {
+            officeParser.parseOffice(filePath, (data, err) => {
+                if (err) {
+                    reject(new Error(`Error parseando PowerPoint: ${err}`));
+                } else {
+                    resolve(data || '');
+                }
+            });
+        });
     }
 }
 
