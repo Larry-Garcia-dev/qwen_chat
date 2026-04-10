@@ -695,11 +695,12 @@ class QwenService {
     }
 
     // ==========================================
-    // 7. DOCUMENT ANALYSIS - Usando Qwen-Long con File Upload API
+    // 7. DOCUMENT ANALYSIS - Usando Qwen-Plus con File Upload API (Internacional)
     // Soporta: PDF, DOCX, XLSX, PPTX, TXT, CSV, JSON, EPUB, MOBI, MD
+    // Nota: qwen-long solo disponible en China, usamos qwen-plus para internacional
     // ==========================================
     static async analyzeDocument(fileName, prompt = 'Resume el contenido de este documento') {
-        console.log(`\n[API REQUEST] Document Analysis (Qwen-Long)`);
+        console.log(`\n[API REQUEST] Document Analysis (Qwen-Plus)`);
         console.log(`[FILE] ${fileName}`);
         console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
         
@@ -743,8 +744,8 @@ class QwenService {
             console.log(`[PROCESSING] Esperando procesamiento del archivo...`);
             await this.waitForFileProcessing(fileId);
 
-            // Paso 3: Usar Qwen-Long para analizar el documento
-            console.log(`[ANALYSIS] Analizando documento con Qwen-Long...`);
+            // Paso 3: Usar Qwen-Plus para analizar el documento (disponible internacionalmente)
+            console.log(`[ANALYSIS] Analizando documento con Qwen-Plus...`);
             const result = await this.chatWithDocument(fileId, prompt);
             
             return result;
@@ -816,15 +817,26 @@ class QwenService {
     }
 
     /**
-     * Chat con un documento usando Qwen-Long y el file-id
+     * Chat con un documento usando Qwen-Plus y el file-id
+     * Nota: qwen-long no disponible internacionalmente, usamos qwen-plus
      */
     static async chatWithDocument(fileId, prompt) {
+        // Primero obtener el contenido extraido del archivo
+        console.log(`[EXTRACT] Obteniendo contenido del archivo...`);
+        const fileContent = await this.getFileContent(fileId);
+        
+        // Usar qwen-plus con el contenido extraido
         const payload = {
-            model: "qwen-long",
+            model: "qwen-plus",
             messages: [
-                { role: "system", content: "Eres un asistente experto en analisis de documentos. Responde en el mismo idioma que el usuario." },
-                { role: "system", content: `fileid://${fileId}` },
-                { role: "user", content: prompt }
+                { 
+                    role: "system", 
+                    content: "Eres un asistente experto en analisis de documentos. Responde en el mismo idioma que el usuario. Analiza el contenido del documento proporcionado y responde las preguntas del usuario de forma precisa y detallada." 
+                },
+                { 
+                    role: "user", 
+                    content: `Contenido del documento:\n\n${fileContent}\n\n---\n\nPregunta/Instruccion del usuario: ${prompt}` 
+                }
             ],
             stream: false
         };
@@ -841,6 +853,28 @@ class QwenService {
         }
 
         console.log(`[SUCCESS] Document analysis completed`);
+        return content;
+    }
+
+    /**
+     * Obtiene el contenido extraido de un archivo procesado
+     */
+    static async getFileContent(fileId) {
+        const response = await axios.get(
+            `${URL_COMPATIBLE}/files/${fileId}/content`,
+            { headers: this.getHeaders(), timeout: 60000 }
+        );
+
+        // El contenido puede venir como texto directo o en un objeto
+        const content = typeof response.data === 'string' 
+            ? response.data 
+            : response.data?.content || JSON.stringify(response.data);
+        
+        if (!content || content.length === 0) {
+            throw new Error('No se pudo extraer contenido del archivo');
+        }
+
+        console.log(`[EXTRACT SUCCESS] Contenido extraido (${content.length} caracteres)`);
         return content;
     }
 
