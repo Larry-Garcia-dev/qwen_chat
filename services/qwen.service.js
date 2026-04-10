@@ -415,85 +415,165 @@ class QwenService {
     }
 
     // ==========================================
-    // 4. TEXT TO SPEECH (CosyVoice v3 - HTTP API)
-    // Endpoint: /api/v1/services/audio/tts/SpeechSynthesizer
+    // 4. TEXT TO SPEECH (CosyVoice v3 - WebSocket API)
+    // CosyVoice SOLO soporta WebSocket, no HTTP
+    // URL: wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference
     // ==========================================
     static async textToSpeech(text) {
-        console.log(`\n[API REQUEST] Text to Speech (CosyVoice v3)`);
+        console.log(`\n[API REQUEST] Text to Speech (CosyVoice v3 WebSocket)`);
         console.log(`[TEXT] ${text.substring(0, 100)}...`);
         
         if (!text || typeof text !== 'string') {
             throw new Error('El texto es requerido para TTS');
         }
 
-        // Payload correcto para CosyVoice TTS HTTP API
-        // voice va dentro de input, no en parameters
-        const payload = {
-            model: "cosyvoice-v3-flash",
-            input: {
-                text: text,
-                voice: "longanyang",
-                format: "mp3",
-                sample_rate: 22050
-            }
-        };
-
-        // Endpoint correcto para TTS internacional
-        const TTS_URL = 'https://dashscope-intl.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer';
-
-        try {
-            // Llamada sincrona (no async) para TTS
-            const createRes = await axios.post(
-                TTS_URL, 
-                payload, 
-                { headers: this.getHeaders(), timeout: 60000 }
-            );
+        const WebSocket = require('ws');
+        const { v4: uuidv4 } = require('uuid');
+        
+        return new Promise((resolve, reject) => {
+            const taskId = uuidv4().replace(/-/g, '');
+            const audioChunks = [];
+            let isTaskStarted = false;
             
-            console.log(`[DEBUG] TTS Response: ${JSON.stringify(createRes.data)}`);
+            // URL WebSocket internacional
+            const wsUrl = 'wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference';
             
-            // El nuevo formato de respuesta tiene output.audio.url o output.audio.data
-            const audioOutput = createRes.data?.output?.audio;
-            const finishReason = createRes.data?.output?.finish_reason;
+            console.log(`[TTS] Conectando a WebSocket...`);
+            console.log(`[TTS] Task ID: ${taskId}`);
             
-            if (finishReason === 'stop' && audioOutput) {
-                // La respuesta contiene URL del audio generado
-                const audioUrl = audioOutput.url;
-                const audioData = audioOutput.data;
-                
-                if (audioData && audioData.length > 0) {
-                    // Audio en base64
-                    const localFileName = `tts_${Date.now()}.mp3`;
-                    const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
-                    fs.writeFileSync(filePath, Buffer.from(audioData, 'base64'));
-                    console.log(`[SUCCESS] Audio guardado desde base64`);
-                    return this.getPublicUrl(localFileName, 'audio');
+            const ws = new WebSocket(wsUrl, {
+                headers: {
+                    'Authorization': `Bearer ${process.env.DASHSCOPE_API_KEY}`
                 }
+            });
+            
+            // Timeout de 60 segundos
+            const timeout = setTimeout(() => {
+                ws.close();
+                reject(new Error('Timeout: TTS tardó demasiado'));
+            }, 60000);
+            
+            ws.on('open', () => {
+                console.log(`[TTS] WebSocket conectado, enviando run-task...`);
                 
-                if (audioUrl) {
-                    console.log(`[SUCCESS] Audio URL: ${audioUrl}`);
-                    const localFileName = `tts_${Date.now()}.mp3`;
-                    const localUrl = await this.downloadAndSaveFile(audioUrl, localFileName, 'audio');
-                    return localUrl;
+                // 1. Enviar run-task para iniciar la tarea
+                const runTask = {
+                    header: {
+                        action: "run-task",
+                        task_id: taskId,
+                        streaming: "duplex"
+                    },
+                    payload: {
+                        task_group: "audio",
+                        task: "tts",
+                        function: "SpeechSynthesizer",
+                        model: "cosyvoice-v3-flash",
+                        parameters: {
+                            text_type: "PlainText",
+                            voice: "longanyang",
+                            format: "mp3",
+                            sample_rate: 22050,
+                            volume: 50,
+                            rate: 1,
+                            pitch: 1
+                        },
+                        input: {}
+                    }
+                };
+                
+                ws.send(JSON.stringify(runTask));
+            });
+            
+            ws.on('message', (data) => {
+                // Verificar si es datos binarios (audio) o JSON (evento)
+                if (Buffer.isBuffer(data)) {
+                    // Es audio binario
+                    audioChunks.push(data);
+                    console.log(`[TTS] Audio chunk recibido: ${data.length} bytes`);
+                } else {
+                    // Es evento JSON
+                    try {
+                        const event = JSON.parse(data.toString());
+                        const action = event.header?.action;
+                        
+                        console.log(`[TTS] Evento: ${action}`);
+                        
+                        if (action === 'task-started') {
+                            isTaskStarted = true;
+                            console.log(`[TTS] Tarea iniciada, enviando texto...`);
+                            
+                            // 2. Enviar continue-task con el texto
+                            const continueTask = {
+                                header: {
+                                    action: "continue-task",
+                                    task_id: taskId,
+                                    streaming: "duplex"
+                                },
+                                payload: {
+                                    input: {
+                                        text: text
+                                    }
+                                }
+                            };
+                            ws.send(JSON.stringify(continueTask));
+                            
+                            // 3. Enviar finish-task para indicar fin del texto
+                            const finishTask = {
+                                header: {
+                                    action: "finish-task",
+                                    task_id: taskId,
+                                    streaming: "duplex"
+                                },
+                                payload: {
+                                    input: {}
+                                }
+                            };
+                            ws.send(JSON.stringify(finishTask));
+                        }
+                        
+                        if (action === 'task-finished') {
+                            console.log(`[TTS] Tarea completada`);
+                            clearTimeout(timeout);
+                            ws.close();
+                            
+                            // Guardar audio
+                            if (audioChunks.length > 0) {
+                                const audioBuffer = Buffer.concat(audioChunks);
+                                const localFileName = `tts_${Date.now()}.mp3`;
+                                const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
+                                fs.writeFileSync(filePath, audioBuffer);
+                                console.log(`[TTS SUCCESS] Audio guardado: ${localFileName} (${audioBuffer.length} bytes)`);
+                                resolve(this.getPublicUrl(localFileName, 'audio'));
+                            } else {
+                                reject(new Error('No se recibió audio'));
+                            }
+                        }
+                        
+                        if (action === 'task-failed') {
+                            const errorMsg = event.payload?.message || 'Error desconocido';
+                            console.error(`[TTS ERROR] ${errorMsg}`);
+                            clearTimeout(timeout);
+                            ws.close();
+                            reject(new Error(`TTS fallido: ${errorMsg}`));
+                        }
+                        
+                    } catch (e) {
+                        console.log(`[TTS] Mensaje no-JSON recibido`);
+                    }
                 }
-            }
+            });
             
-            // Fallback: buscar en formato antiguo
-            const legacyAudioUrl = createRes.data?.output?.audio_url || createRes.data?.output?.url;
-            if (legacyAudioUrl) {
-                console.log(`[SUCCESS] Audio URL (legacy): ${legacyAudioUrl}`);
-                const localFileName = `tts_${Date.now()}.mp3`;
-                const localUrl = await this.downloadAndSaveFile(legacyAudioUrl, localFileName, 'audio');
-                return localUrl;
-            }
+            ws.on('error', (error) => {
+                console.error(`[TTS WebSocket ERROR] ${error.message}`);
+                clearTimeout(timeout);
+                reject(new Error(`Error WebSocket TTS: ${error.message}`));
+            });
             
-            throw new Error('No se pudo obtener audio de la respuesta');
-        } catch (error) {
-            console.error(`[ERROR] TTS: ${error.message}`);
-            if (error.response?.data) {
-                console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
-            }
-            throw new Error(`Error en TTS: ${error.response?.data?.message || error.response?.data?.error?.message || error.message}`);
-        }
+            ws.on('close', () => {
+                console.log(`[TTS] WebSocket cerrado`);
+                clearTimeout(timeout);
+            });
+        });
     }
 
     // ==========================================
