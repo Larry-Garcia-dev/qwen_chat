@@ -485,80 +485,108 @@ class QwenService {
             });
             
             ws.on('message', (data) => {
-                // Verificar si es datos binarios (audio) o JSON (evento)
-                if (Buffer.isBuffer(data)) {
-                    // Es audio binario
-                    audioChunks.push(data);
-                    console.log(`[TTS] Audio chunk recibido: ${data.length} bytes`);
-                } else {
-                    // Es evento JSON
-                    try {
-                        const event = JSON.parse(data.toString());
-                        const action = event.header?.action;
+                // Convertir a string para intentar parsear como JSON primero
+                const dataStr = data.toString();
+                
+                // Intentar parsear como JSON
+                try {
+                    const event = JSON.parse(dataStr);
+                    const action = event.header?.action;
+                    const code = event.header?.code;
+                    const message = event.header?.message;
+                    
+                    console.log(`[TTS] Evento: ${action}, Code: ${code}, Message: ${message || 'N/A'}`);
+                    
+                    // Verificar errores
+                    if (code && code !== 'Success' && code !== 0) {
+                        console.error(`[TTS ERROR] Code: ${code}, Message: ${message}`);
+                        clearTimeout(timeout);
+                        ws.close();
+                        reject(new Error(`TTS Error: ${message || code}`));
+                        return;
+                    }
+                    
+                    if (action === 'task-started') {
+                        isTaskStarted = true;
+                        console.log(`[TTS] Tarea iniciada, enviando texto...`);
                         
-                        console.log(`[TTS] Evento: ${action}`);
-                        
-                        if (action === 'task-started') {
-                            isTaskStarted = true;
-                            console.log(`[TTS] Tarea iniciada, enviando texto...`);
-                            
-                            // 2. Enviar continue-task con el texto
-                            const continueTask = {
-                                header: {
-                                    action: "continue-task",
-                                    task_id: taskId,
-                                    streaming: "duplex"
-                                },
-                                payload: {
-                                    input: {
-                                        text: text
-                                    }
+                        // 2. Enviar continue-task con el texto
+                        const continueTask = {
+                            header: {
+                                action: "continue-task",
+                                task_id: taskId,
+                                streaming: "duplex"
+                            },
+                            payload: {
+                                input: {
+                                    text: text
                                 }
-                            };
-                            ws.send(JSON.stringify(continueTask));
-                            
-                            // 3. Enviar finish-task para indicar fin del texto
-                            const finishTask = {
-                                header: {
-                                    action: "finish-task",
-                                    task_id: taskId,
-                                    streaming: "duplex"
-                                },
-                                payload: {
-                                    input: {}
-                                }
-                            };
-                            ws.send(JSON.stringify(finishTask));
-                        }
-                        
-                        if (action === 'task-finished') {
-                            console.log(`[TTS] Tarea completada`);
-                            clearTimeout(timeout);
-                            ws.close();
-                            
-                            // Guardar audio
-                            if (audioChunks.length > 0) {
-                                const audioBuffer = Buffer.concat(audioChunks);
-                                const localFileName = `tts_${Date.now()}.mp3`;
-                                const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
-                                fs.writeFileSync(filePath, audioBuffer);
-                                console.log(`[TTS SUCCESS] Audio guardado: ${localFileName} (${audioBuffer.length} bytes)`);
-                                resolve(this.getPublicUrl(localFileName, 'audio'));
-                            } else {
-                                reject(new Error('No se recibió audio'));
                             }
-                        }
+                        };
+                        ws.send(JSON.stringify(continueTask));
                         
-                        if (action === 'task-failed') {
-                            const errorMsg = event.payload?.message || 'Error desconocido';
-                            console.error(`[TTS ERROR] ${errorMsg}`);
-                            clearTimeout(timeout);
-                            ws.close();
-                            reject(new Error(`TTS fallido: ${errorMsg}`));
+                        // 3. Enviar finish-task para indicar fin del texto
+                        const finishTask = {
+                            header: {
+                                action: "finish-task",
+                                task_id: taskId,
+                                streaming: "duplex"
+                            },
+                            payload: {
+                                input: {}
+                            }
+                        };
+                        ws.send(JSON.stringify(finishTask));
+                    }
+                    
+                    // Verificar si hay audio en el payload (formato base64)
+                    if (event.payload?.output?.audio) {
+                        const audioBase64 = event.payload.output.audio;
+                        const audioBuffer = Buffer.from(audioBase64, 'base64');
+                        audioChunks.push(audioBuffer);
+                        console.log(`[TTS] Audio chunk (base64): ${audioBuffer.length} bytes`);
+                    }
+                    
+                    if (action === 'result-generated') {
+                        // Chunk de audio generado
+                        if (event.payload?.output?.audio) {
+                            console.log(`[TTS] Audio en result-generated`);
                         }
+                    }
+                    
+                    if (action === 'task-finished') {
+                        console.log(`[TTS] Tarea completada`);
+                        clearTimeout(timeout);
+                        ws.close();
                         
-                    } catch (e) {
-                        console.log(`[TTS] Mensaje no-JSON recibido`);
+                        // Guardar audio
+                        if (audioChunks.length > 0) {
+                            const audioBuffer = Buffer.concat(audioChunks);
+                            const localFileName = `tts_${Date.now()}.mp3`;
+                            const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
+                            fs.writeFileSync(filePath, audioBuffer);
+                            console.log(`[TTS SUCCESS] Audio guardado: ${localFileName} (${audioBuffer.length} bytes)`);
+                            resolve(this.getPublicUrl(localFileName, 'audio'));
+                        } else {
+                            reject(new Error('No se recibió audio'));
+                        }
+                    }
+                    
+                    if (action === 'task-failed') {
+                        const errorMsg = event.header?.message || event.payload?.message || 'Error desconocido';
+                        console.error(`[TTS FAILED] ${errorMsg}`);
+                        clearTimeout(timeout);
+                        ws.close();
+                        reject(new Error(`TTS fallido: ${errorMsg}`));
+                    }
+                    
+                } catch (e) {
+                    // No es JSON, es audio binario puro
+                    if (Buffer.isBuffer(data) && data.length > 200) {
+                        audioChunks.push(data);
+                        console.log(`[TTS] Audio binario: ${data.length} bytes`);
+                    } else {
+                        console.log(`[TTS] Mensaje desconocido (${data.length} bytes): ${dataStr.substring(0, 100)}`);
                     }
                 }
             });
@@ -569,9 +597,25 @@ class QwenService {
                 reject(new Error(`Error WebSocket TTS: ${error.message}`));
             });
             
-            ws.on('close', () => {
-                console.log(`[TTS] WebSocket cerrado`);
+            ws.on('close', (code, reason) => {
+                console.log(`[TTS] WebSocket cerrado. Code: ${code}, Reason: ${reason || 'N/A'}`);
                 clearTimeout(timeout);
+                
+                // Si el WebSocket se cierra y tenemos audio, guardarlo
+                if (audioChunks.length > 0) {
+                    const audioBuffer = Buffer.concat(audioChunks);
+                    if (audioBuffer.length > 1000) { // Solo si hay suficiente audio
+                        const localFileName = `tts_${Date.now()}.mp3`;
+                        const filePath = path.join(process.cwd(), 'uploads', 'audio', localFileName);
+                        fs.writeFileSync(filePath, audioBuffer);
+                        console.log(`[TTS SUCCESS on close] Audio guardado: ${localFileName} (${audioBuffer.length} bytes)`);
+                        resolve(this.getPublicUrl(localFileName, 'audio'));
+                        return;
+                    }
+                }
+                
+                // Si no hay audio y la Promise no se ha resuelto, rechazar
+                reject(new Error('WebSocket cerrado sin recibir audio completo'));
             });
         });
     }
