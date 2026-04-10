@@ -142,7 +142,9 @@ exports.handleAudioToText = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/qwen/multimodal
- * Análisis de imágenes y documentos con visión
+ * Análisis de imágenes y documentos
+ * - Imagenes: usa qwen-vl-max (vision)
+ * - Documentos (PDF, DOCX, XLSX, PPTX, etc.): usa Qwen-Long con File Upload API
  */
 exports.handleMultimodal = asyncHandler(async (req, res) => {
     if (!req.file) {
@@ -154,18 +156,39 @@ exports.handleMultimodal = asyncHandler(async (req, res) => {
     
     const { prompt } = req.body;
     const defaultPrompt = 'Analiza y describe este contenido en detalle';
+    const fileName = req.file.filename;
+    const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
     
-    console.log(`[MULTIMODAL] Archivo: ${req.file.filename}`);
-    const response = await QwenService.chatVision(
-        req.file.filename,
-        prompt || defaultPrompt
-    );
+    // Determinar si es imagen o documento
+    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+    const docExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.txt', '.csv', '.json', '.epub', '.mobi', '.md'];
+    
+    console.log(`[MULTIMODAL] Archivo: ${fileName}, Extension: ${ext}`);
+    
+    let response;
+    let analysisType;
+    
+    if (imageExts.includes(ext)) {
+        // Usar vision para imagenes
+        analysisType = 'vision';
+        response = await QwenService.chatVision(fileName, prompt || defaultPrompt);
+    } else if (docExts.includes(ext)) {
+        // Usar Qwen-Long para documentos
+        analysisType = 'document';
+        response = await QwenService.analyzeDocument(fileName, prompt || defaultPrompt);
+    } else {
+        return res.status(400).json({
+            success: false,
+            error: `Formato no soportado: ${ext}. Formatos soportados: imagenes (${imageExts.join(', ')}) y documentos (${docExts.join(', ')})`
+        });
+    }
     
     res.json({
         success: true,
         data: response,
         type: 'text',
-        analyzedFile: req.file.filename
+        analysisType: analysisType,
+        analyzedFile: fileName
     });
 });
 
@@ -184,7 +207,11 @@ exports.healthCheck = (req, res) => {
             'POST /api/qwen/generate-video - Generar video (T2V/I2V)',
             'POST /api/qwen/tts - Texto a voz',
             'POST /api/qwen/audio-stt - Audio a texto',
-            'POST /api/qwen/multimodal - Análisis visual'
-        ]
+            'POST /api/qwen/multimodal - Análisis visual/documentos (imagenes + PDF/DOCX/XLSX/PPTX)'
+        ],
+        supportedFormats: {
+            images: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'],
+            documents: ['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'txt', 'csv', 'json', 'epub', 'mobi', 'md']
+        }
     });
 };

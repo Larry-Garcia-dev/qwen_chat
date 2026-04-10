@@ -695,10 +695,11 @@ class QwenService {
     }
 
     // ==========================================
-    // 7. DOCUMENT ANALYSIS - Para PDFs usar Qwen-Long
+    // 7. DOCUMENT ANALYSIS - Usando Qwen-Long con File Upload API
+    // Soporta: PDF, DOCX, XLSX, PPTX, TXT, CSV, JSON, EPUB, MOBI, MD
     // ==========================================
     static async analyzeDocument(fileName, prompt = 'Resume el contenido de este documento') {
-        console.log(`\n[API REQUEST] Document Analysis (qwen-long)`);
+        console.log(`\n[API REQUEST] Document Analysis (Qwen-Long)`);
         console.log(`[FILE] ${fileName}`);
         console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
         
@@ -707,48 +708,157 @@ class QwenService {
         }
 
         const ext = path.extname(fileName).toLowerCase();
-        
-        // Para PDFs, usar qwen-long que puede procesar documentos
-        if (ext === '.pdf') {
-            // Leer el PDF y extraer texto (simplificado - en produccion usar pdf-parse)
-            const filePath = path.join(process.cwd(), 'uploads', 'documents', fileName);
-            
-            if (!fs.existsSync(filePath)) {
-                // Intentar en images por si se subio ahi
-                const altPath = path.join(process.cwd(), 'uploads', 'images', fileName);
-                if (fs.existsSync(altPath)) {
-                    // Mover a documents
-                    fs.copyFileSync(altPath, filePath);
-                } else {
-                    throw new Error('Archivo PDF no encontrado');
-                }
-            }
-
-            // Para PDFs, usar el modelo de texto con un mensaje explicativo
-            const payload = {
-                model: "qwen-plus",
-                messages: [{
-                    role: "user",
-                    content: `El usuario ha subido un documento PDF llamado "${fileName}". Por favor responde: ${prompt}\n\nNota: Actualmente el analisis directo de PDFs requiere conversion previa. Por favor indica al usuario que suba imagenes de las paginas del documento o que copie el texto relevante.`
-                }]
-            };
-
-            try {
-                const response = await axios.post(
-                    `${URL_COMPATIBLE}/chat/completions`,
-                    payload,
-                    { headers: this.getHeaders(), timeout: 60000 }
-                );
-                
-                return response.data?.choices?.[0]?.message?.content || 'No se pudo procesar el documento';
-            } catch (error) {
-                console.error(`[ERROR] Document: ${error.message}`);
-                throw new Error(`Error procesando documento: ${error.response?.data?.error?.message || error.message}`);
-            }
-        }
+        const supportedDocExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.txt', '.csv', '.json', '.epub', '.mobi', '.md'];
+        const supportedImageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
         
         // Si es imagen, usar chatVision
-        return await this.chatVision(fileName, prompt);
+        if (supportedImageExts.includes(ext)) {
+            return await this.chatVision(fileName, prompt);
+        }
+        
+        // Verificar si es un documento soportado
+        if (!supportedDocExts.includes(ext)) {
+            throw new Error(`Formato no soportado: ${ext}. Formatos soportados: ${supportedDocExts.join(', ')}`);
+        }
+
+        // Buscar el archivo en diferentes ubicaciones
+        let filePath = path.join(process.cwd(), 'uploads', 'documents', fileName);
+        if (!fs.existsSync(filePath)) {
+            filePath = path.join(process.cwd(), 'uploads', 'images', fileName);
+        }
+        if (!fs.existsSync(filePath)) {
+            filePath = path.join(process.cwd(), 'uploads', fileName);
+        }
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`Archivo no encontrado: ${fileName}`);
+        }
+
+        try {
+            // Paso 1: Subir el archivo a DashScope usando la API de archivos
+            console.log(`[UPLOAD] Subiendo archivo a DashScope...`);
+            const fileId = await this.uploadFileToDashScope(filePath, fileName);
+            console.log(`[UPLOAD SUCCESS] File ID: ${fileId}`);
+
+            // Paso 2: Esperar a que el archivo sea procesado
+            console.log(`[PROCESSING] Esperando procesamiento del archivo...`);
+            await this.waitForFileProcessing(fileId);
+
+            // Paso 3: Usar Qwen-Long para analizar el documento
+            console.log(`[ANALYSIS] Analizando documento con Qwen-Long...`);
+            const result = await this.chatWithDocument(fileId, prompt);
+            
+            return result;
+        } catch (error) {
+            console.error(`[ERROR] Document Analysis: ${error.message}`);
+            if (error.response?.data) {
+                console.error(`[ERROR DETAIL] ${JSON.stringify(error.response.data)}`);
+            }
+            throw new Error(`Error analizando documento: ${error.response?.data?.error?.message || error.message}`);
+        }
+    }
+
+    /**
+     * Sube un archivo a DashScope usando la API compatible con OpenAI
+     */
+    static async uploadFileToDashScope(filePath, fileName) {
+        const FormData = require('form-data');
+        const formData = new FormData();
+        
+        formData.append('file', fs.createReadStream(filePath), fileName);
+        formData.append('purpose', 'file-extract');
+
+        const response = await axios.post(
+            `${URL_COMPATIBLE}/files`,
+            formData,
+            {
+                headers: {
+                    ...this.getHeaders(),
+                    ...formData.getHeaders()
+                },
+                timeout: 120000 // 2 minutos para archivos grandes
+            }
+        );
+
+        const fileId = response.data?.id;
+        if (!fileId) {
+            throw new Error('No se pudo obtener el ID del archivo subido');
+        }
+
+        return fileId;
+    }
+
+    /**
+     * Espera a que un archivo sea procesado por DashScope
+     */
+    static async waitForFileProcessing(fileId, maxAttempts = 30) {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const response = await axios.get(
+                `${URL_COMPATIBLE}/files/${fileId}`,
+                { headers: this.getHeaders(), timeout: 30000 }
+            );
+
+            const status = response.data?.status;
+            console.log(`[FILE STATUS ${attempt + 1}/${maxAttempts}] ${status}`);
+
+            if (status === 'processed') {
+                return true;
+            }
+
+            if (status === 'error' || status === 'failed') {
+                throw new Error(`Error procesando archivo: ${response.data?.status_details || 'Error desconocido'}`);
+            }
+
+            // Esperar 2 segundos antes del siguiente intento
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        throw new Error('Timeout esperando procesamiento del archivo');
+    }
+
+    /**
+     * Chat con un documento usando Qwen-Long y el file-id
+     */
+    static async chatWithDocument(fileId, prompt) {
+        const payload = {
+            model: "qwen-long",
+            messages: [
+                { role: "system", content: "Eres un asistente experto en analisis de documentos. Responde en el mismo idioma que el usuario." },
+                { role: "system", content: `fileid://${fileId}` },
+                { role: "user", content: prompt }
+            ],
+            stream: false
+        };
+
+        const response = await axios.post(
+            `${URL_COMPATIBLE}/chat/completions`,
+            payload,
+            { headers: this.getHeaders(), timeout: 120000 }
+        );
+
+        const content = response.data?.choices?.[0]?.message?.content;
+        if (!content) {
+            throw new Error('Respuesta vacía del modelo');
+        }
+
+        console.log(`[SUCCESS] Document analysis completed`);
+        return content;
+    }
+
+    /**
+     * Elimina un archivo de DashScope (opcional, para limpieza)
+     */
+    static async deleteFileFromDashScope(fileId) {
+        try {
+            await axios.delete(
+                `${URL_COMPATIBLE}/files/${fileId}`,
+                { headers: this.getHeaders(), timeout: 30000 }
+            );
+            console.log(`[CLEANUP] Archivo ${fileId} eliminado`);
+            return true;
+        } catch (error) {
+            console.warn(`[CLEANUP WARNING] No se pudo eliminar archivo: ${error.message}`);
+            return false;
+        }
     }
 }
 

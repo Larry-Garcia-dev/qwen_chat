@@ -77,7 +77,7 @@ const upload = multer({
     storage,
     fileFilter,
     limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB máximo
+        fileSize: 150 * 1024 * 1024, // 150MB máximo (limite de DashScope)
     }
 });
 
