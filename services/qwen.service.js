@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
+const DatabaseService = require('./database.service');
 
 const URL_COMPATIBLE = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
 const URL_AIGC = 'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc';
@@ -106,7 +107,7 @@ class QwenService {
     }
 
     // ==========================================
-    // 1. CHAT (Qwen Plus con Thinking y Memoria de Contexto)
+    // 1. CHAT (Qwen Plus con Thinking, Memoria y BD de Seguros)
     // ==========================================
     static async chat(prompt, enableThinking = true, conversationHistory = [], documentContext = null) {
         console.log(`\n[API REQUEST] Chat Qwen Plus (con memoria)`);
@@ -123,12 +124,52 @@ class QwenService {
         // Construir mensajes con historial de conversacion
         const messages = [];
         
+        // Obtener contexto de la base de datos si está conectada
+        let dbContextStr = '';
+        if (DatabaseService.isDBConnected()) {
+            try {
+                const dbContext = await DatabaseService.getContextData();
+                if (dbContext) {
+                    dbContextStr = `
+
+=== INFORMACIÓN DE SEGUROS HDI (Base de Datos) ===
+
+TIPOS DE SEGUROS DISPONIBLES:
+${dbContext.tiposSeguros?.map(t => `- ${t.nombre} (${t.codigo}): ${t.descripcion || ''}`).join('\n') || 'No disponible'}
+
+COBERTURAS DE SEGURO DE AUTO:
+${dbContext.coberturas?.filter(c => c.tipo_seguro_nombre?.includes('Auto')).map(c => `- ${c.nombre}: ${c.descripcion || ''} (Deducible: ${c.deducible_porcentaje}%)`).join('\n') || 'No disponible'}
+
+TARIFAS BASE:
+${dbContext.tarifas?.map(t => `- ${t.nombre}: $${t.prima_base} MXN anual`).join('\n') || 'No disponible'}
+
+ZONAS Y FACTORES DE RIESGO:
+${dbContext.zonas?.map(z => `- ${z.nombre} (${z.codigo}): Factor ${z.factor_riesgo}`).join('\n') || 'No disponible'}
+
+MARCAS DE VEHÍCULOS Y FACTORES:
+${dbContext.marcas?.map(m => `- ${m.nombre}: Factor ${m.factor_riesgo}`).join('\n') || 'No disponible'}
+
+CONFIGURACIÓN:
+- IVA: ${dbContext.configuracion?.IVA_PORCENTAJE || 16}%
+- Descuento pago anual: ${dbContext.configuracion?.DESCUENTO_PAGO_ANUAL || 10}%
+- Vigencia cotización: ${dbContext.configuracion?.VIGENCIA_COTIZACION_DIAS || 30} días
+
+Cuando el usuario pregunte por cotizaciones de seguros, usa esta información para calcular y proporcionar cotizaciones precisas.
+Para cotizar un auto necesitas: marca, modelo, año, valor aproximado y zona/ciudad.
+`;
+                    console.log(`[DB CONTEXT] Contexto de BD incluido en el sistema`);
+                }
+            } catch (dbErr) {
+                console.log(`[DB CONTEXT] No se pudo obtener contexto de BD: ${dbErr.message}`);
+            }
+        }
+        
         // Sistema de contexto con documento si existe
         if (documentContext && documentContext.content) {
             messages.push({
                 role: "system",
                 content: `Eres un asistente inteligente de HDI Seguros. Responde en el mismo idioma que el usuario.
-                
+${dbContextStr}
 El usuario ha cargado un documento llamado "${documentContext.fileName}" con el siguiente contenido:
 
 --- INICIO DEL DOCUMENTO ---
@@ -141,7 +182,13 @@ Usa este documento como contexto para responder las preguntas del usuario. Si el
         } else {
             messages.push({
                 role: "system",
-                content: "Eres un asistente inteligente de HDI Seguros. Responde en el mismo idioma que el usuario. Recuerda el contexto de la conversación para dar respuestas coherentes."
+                content: `Eres un asistente inteligente de HDI Seguros. Responde en el mismo idioma que el usuario. Recuerda el contexto de la conversación para dar respuestas coherentes.
+${dbContextStr}
+Puedes ayudar con:
+- Información sobre tipos de seguros (auto, vida, hogar, salud, empresarial)
+- Cotizaciones de seguros de auto
+- Información sobre coberturas y precios
+- Consultas generales sobre seguros`
             });
         }
         
