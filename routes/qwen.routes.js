@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const qwenController = require('../controllers/qwen.controller');
+const dbController = require('../controllers/database.controller');
 
 // ==========================================
 // Configuración de Multer para uploads organizados
@@ -140,5 +141,39 @@ router.post('/multimodal',
     handleMulterError,
     qwenController.handleMultimodal
 );
+
+// ==========================================
+// Endpoints de Base de Datos
+// ==========================================
+
+// Estado de conexión a BD
+router.get('/db/status', dbController.getStatus);
+
+// Esquema de la BD (para IA)
+router.get('/db/schema', dbController.getSchema);
+
+// Contexto de datos (tipos de seguros, coberturas, etc.)
+router.get('/db/context', dbController.getContext);
+
+// Ejecutar consulta SQL segura (solo SELECT)
+router.post('/db/query', dbController.executeQuery);
+
+// Cotizar seguro de auto
+router.post('/db/cotizar/auto', dbController.cotizarAuto);
+
+// Listar tipos de seguros
+router.get('/db/tipos-seguros', dbController.getTiposSeguros);
+
+// Listar coberturas por tipo de seguro
+router.get('/db/coberturas/:tipoSeguroId', dbController.getCoberturas);
+
+// Listar marcas de vehículos
+router.get('/db/marcas', dbController.getMarcas);
+
+// Listar zonas
+router.get('/db/zonas', dbController.getZonas);
+
+// Listar cotizaciones
+router.get('/db/cotizaciones', dbController.getCotizaciones);
 
 module.exports = router;

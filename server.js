@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const qwenRoutes = require('./routes/qwen.routes');
+const DatabaseService = require('./services/database.service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -146,21 +147,37 @@ app.use((req, res) => {
 // ==========================================
 // Iniciar servidor
 // ==========================================
-app.listen(PORT, '0.0.0.0', () => {
-    console.log('\n========================================');
-    console.log('   QWEN AI API SERVER');
-    console.log('========================================');
-    console.log(`Servidor corriendo en: http://localhost:${PORT}`);
-    console.log(`PUBLIC_URL configurada: ${process.env.PUBLIC_URL || 'http://localhost:' + PORT}`);
-    console.log(`Uploads disponibles en: /uploads/*`);
-    console.log('----------------------------------------');
-    console.log('Endpoints disponibles:');
-    console.log('  GET  /api/qwen/health      - Health check');
-    console.log('  POST /api/qwen/chat        - Chat con IA');
-    console.log('  POST /api/qwen/generate-image - Generar imagen');
-    console.log('  POST /api/qwen/generate-video - Generar video');
-    console.log('  POST /api/qwen/tts         - Texto a voz');
-    console.log('  POST /api/qwen/audio-stt   - Audio a texto');
-    console.log('  POST /api/qwen/multimodal  - Análisis visual');
-    console.log('========================================\n');
-});
+const startServer = async () => {
+    // Intentar conectar a la base de datos
+    try {
+        await DatabaseService.initialize();
+        console.log('[INIT] Base de datos MySQL conectada y tablas verificadas');
+    } catch (dbError) {
+        console.warn(`[INIT] Advertencia: No se pudo conectar a MySQL: ${dbError.message}`);
+        console.warn('[INIT] El servidor continuará sin conexión a base de datos');
+    }
+
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log('\n========================================');
+        console.log('   HDI CHAT - QWEN AI API SERVER');
+        console.log('========================================');
+        console.log(`Servidor corriendo en: http://localhost:${PORT}`);
+        console.log(`PUBLIC_URL configurada: ${process.env.PUBLIC_URL || 'http://localhost:' + PORT}`);
+        console.log(`Base de datos: ${DatabaseService.isDBConnected() ? 'Conectada' : 'No conectada'}`);
+        console.log(`Uploads disponibles en: /uploads/*`);
+        console.log('----------------------------------------');
+        console.log('Endpoints disponibles:');
+        console.log('  GET  /api/qwen/health      - Health check');
+        console.log('  POST /api/qwen/chat        - Chat con IA');
+        console.log('  POST /api/qwen/generate-image - Generar imagen');
+        console.log('  POST /api/qwen/generate-video - Generar video');
+        console.log('  POST /api/qwen/tts         - Texto a voz');
+        console.log('  POST /api/qwen/audio-stt   - Audio a texto');
+        console.log('  POST /api/qwen/multimodal  - Análisis visual');
+        console.log('  POST /api/qwen/db/query    - Consulta BD (IA)');
+        console.log('  POST /api/qwen/db/cotizar  - Cotizar seguro');
+        console.log('========================================\n');
+    });
+};
+
+startServer();
