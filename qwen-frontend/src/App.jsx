@@ -45,6 +45,10 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showModeSelector, setShowModeSelector] = useState(false);
+  
+  // Estado para memoria de contexto
+  const [conversationHistory, setConversationHistory] = useState([]);
+  const [documentContext, setDocumentContext] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -130,7 +134,11 @@ function App() {
       switch (mode) {
         case 'chat':
           endpoint = '/chat';
-          body = JSON.stringify({ prompt: text });
+          body = JSON.stringify({ 
+            prompt: text,
+            conversationHistory: conversationHistory,
+            documentContext: documentContext
+          });
           response = await fetch(`${API_URL}${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -200,6 +208,28 @@ function App() {
       if (data.success) {
         const mediaType = detectMediaType(data.data);
         addMessage(data.data, 'bot', mediaType ? 'media' : 'text', mediaType);
+        
+        // Actualizar historial de conversacion solo para chat
+        if (mode === 'chat') {
+          setConversationHistory(prev => [
+            ...prev,
+            { role: 'user', content: text },
+            { role: 'assistant', content: data.data }
+          ]);
+        }
+        
+        // Si es analisis de documento (vision), guardar el contexto con el contenido extraido
+        if (mode === 'vision' && data.analysisType === 'document' && file) {
+          // Guardamos el contenido extraido del documento para memoria
+          const docContent = data.documentContent || data.data;
+          setDocumentContext({
+            fileName: file.name,
+            content: docContent,
+            analysis: data.data, // El analisis inicial
+            timestamp: new Date().toISOString()
+          });
+          addMessage('El documento ha sido cargado en la memoria. Puedes hacerme preguntas sobre su contenido en el modo Chat.', 'bot', 'info');
+        }
       } else {
         addMessage(`Error: ${data.error || 'Error desconocido'}`, 'bot', 'error');
       }
@@ -463,13 +493,41 @@ function App() {
               {currentMode?.name}
             </span>
           </div>
-          <button 
-            className="mobile-mode-btn"
-            onClick={() => setShowModeSelector(!showModeSelector)}
-            aria-label="Seleccionar modo"
-          >
-            <Icon name="settings" size={24} />
-          </button>
+          <div className="header-actions">
+            {/* Indicador de contexto activo */}
+            {(documentContext || conversationHistory.length > 0) && (
+              <div className="context-indicator">
+                {documentContext && (
+                  <span className="context-badge document" title={`Documento: ${documentContext.fileName}`}>
+                    Doc: {documentContext.fileName.substring(0, 15)}...
+                  </span>
+                )}
+                {conversationHistory.length > 0 && (
+                  <span className="context-badge history" title={`${conversationHistory.length} mensajes en memoria`}>
+                    Memoria: {conversationHistory.length} msgs
+                  </span>
+                )}
+                <button 
+                  className="clear-context-btn"
+                  onClick={() => {
+                    setConversationHistory([]);
+                    setDocumentContext(null);
+                    addMessage('Memoria limpiada. El contexto anterior ha sido eliminado.', 'bot', 'info');
+                  }}
+                  title="Limpiar memoria"
+                >
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            )}
+            <button 
+              className="mobile-mode-btn"
+              onClick={() => setShowModeSelector(!showModeSelector)}
+              aria-label="Seleccionar modo"
+            >
+              <Icon name="settings" size={24} />
+            </button>
+          </div>
         </header>
 
         {/* Mobile mode selector */}

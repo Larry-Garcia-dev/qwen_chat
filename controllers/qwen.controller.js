@@ -17,9 +17,15 @@ const asyncHandler = (fn) => (req, res, next) => {
 /**
  * POST /api/qwen/chat
  * Chat con el modelo de texto Qwen Plus
+ * Soporta memoria de conversacion y contexto de documentos
  */
 exports.handleChat = asyncHandler(async (req, res) => {
-    const { prompt, enableThinking = true } = req.body;
+    const { 
+        prompt, 
+        enableThinking = true, 
+        conversationHistory = [], 
+        documentContext = null 
+    } = req.body;
     
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
         return res.status(400).json({
@@ -28,8 +34,18 @@ exports.handleChat = asyncHandler(async (req, res) => {
         });
     }
     
-    console.log(`[CHAT] Prompt recibido: ${prompt.substring(0, 50)}...`);
-    const response = await QwenService.chat(prompt.trim(), enableThinking);
+    console.log(`[CHAT] Prompt: ${prompt.substring(0, 50)}...`);
+    console.log(`[CHAT] Historia: ${conversationHistory.length} mensajes`);
+    if (documentContext) {
+        console.log(`[CHAT] Documento en contexto: ${documentContext.fileName}`);
+    }
+    
+    const response = await QwenService.chat(
+        prompt.trim(), 
+        enableThinking, 
+        conversationHistory,
+        documentContext
+    );
     
     res.json({
         success: true,
@@ -167,6 +183,7 @@ exports.handleMultimodal = asyncHandler(async (req, res) => {
     
     let response;
     let analysisType;
+    let documentContent = null;
     
     if (imageExts.includes(ext)) {
         // Usar vision para imagenes
@@ -175,7 +192,10 @@ exports.handleMultimodal = asyncHandler(async (req, res) => {
     } else if (docExts.includes(ext)) {
         // Usar Qwen-Long para documentos
         analysisType = 'document';
-        response = await QwenService.analyzeDocument(fileName, prompt || defaultPrompt);
+        const result = await QwenService.analyzeDocument(fileName, prompt || defaultPrompt);
+        // El servicio ahora retorna un objeto con analysis y extractedContent
+        response = result.analysis;
+        documentContent = result.extractedContent;
     } else {
         return res.status(400).json({
             success: false,
@@ -188,7 +208,8 @@ exports.handleMultimodal = asyncHandler(async (req, res) => {
         data: response,
         type: 'text',
         analysisType: analysisType,
-        analyzedFile: fileName
+        analyzedFile: fileName,
+        documentContent: documentContent // Contenido extraido para guardar en contexto
     });
 });
 

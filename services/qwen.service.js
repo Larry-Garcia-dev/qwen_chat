@@ -106,19 +106,62 @@ class QwenService {
     }
 
     // ==========================================
-    // 1. CHAT (Qwen Plus con Thinking)
+    // 1. CHAT (Qwen Plus con Thinking y Memoria de Contexto)
     // ==========================================
-    static async chat(prompt, enableThinking = true) {
-        console.log(`\n[API REQUEST] Chat Qwen Plus`);
+    static async chat(prompt, enableThinking = true, conversationHistory = [], documentContext = null) {
+        console.log(`\n[API REQUEST] Chat Qwen Plus (con memoria)`);
         console.log(`[PROMPT] ${prompt.substring(0, 100)}...`);
+        console.log(`[HISTORY] ${conversationHistory.length} mensajes previos`);
+        if (documentContext) {
+            console.log(`[CONTEXT] Documento en contexto: ${documentContext.fileName}`);
+        }
         
         if (!prompt || typeof prompt !== 'string') {
             throw new Error('El prompt es requerido y debe ser texto');
         }
 
+        // Construir mensajes con historial de conversacion
+        const messages = [];
+        
+        // Sistema de contexto con documento si existe
+        if (documentContext && documentContext.content) {
+            messages.push({
+                role: "system",
+                content: `Eres un asistente inteligente de HDI Seguros. Responde en el mismo idioma que el usuario.
+                
+El usuario ha cargado un documento llamado "${documentContext.fileName}" con el siguiente contenido:
+
+--- INICIO DEL DOCUMENTO ---
+${documentContext.content.substring(0, 50000)}
+${documentContext.content.length > 50000 ? '\n[... contenido truncado ...]' : ''}
+--- FIN DEL DOCUMENTO ---
+
+Usa este documento como contexto para responder las preguntas del usuario. Si el usuario pregunta algo relacionado con el documento, responde basándote en su contenido.`
+            });
+        } else {
+            messages.push({
+                role: "system",
+                content: "Eres un asistente inteligente de HDI Seguros. Responde en el mismo idioma que el usuario. Recuerda el contexto de la conversación para dar respuestas coherentes."
+            });
+        }
+        
+        // Agregar historial de conversacion (limitar a ultimos 20 mensajes para no exceder tokens)
+        const recentHistory = conversationHistory.slice(-20);
+        for (const msg of recentHistory) {
+            if (msg.role && msg.content) {
+                messages.push({
+                    role: msg.role,
+                    content: msg.content
+                });
+            }
+        }
+        
+        // Agregar el mensaje actual del usuario
+        messages.push({ role: "user", content: prompt });
+
         const payload = {
             model: "qwen-plus",
-            messages: [{ role: "user", content: prompt }],
+            messages: messages,
             stream: false,
             enable_thinking: enableThinking
         };
@@ -127,7 +170,7 @@ class QwenService {
             const response = await axios.post(
                 `${URL_COMPATIBLE}/chat/completions`, 
                 payload, 
-                { headers: this.getHeaders(), timeout: 60000 }
+                { headers: this.getHeaders(), timeout: 90000 }
             );
             
             const content = response.data?.choices?.[0]?.message?.content;
@@ -869,7 +912,14 @@ class QwenService {
             }
 
             console.log(`[SUCCESS] Document analysis completed`);
-            return content;
+            
+            // Retornar tanto el analisis como el contenido extraido para memoria
+            return {
+                analysis: content,
+                extractedContent: contentToAnalyze,
+                originalLength: documentContent.length,
+                truncated: documentContent.length > maxChars
+            };
             
         } catch (error) {
             console.error(`[ERROR] Document Analysis: ${error.message}`);
