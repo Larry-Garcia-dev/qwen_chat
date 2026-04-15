@@ -45,6 +45,10 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showModeSelector, setShowModeSelector] = useState(false);
+  
+  // Estado para memoria de contexto
+  const [conversationHistory, setConversationHistory] = useState([]);
+  const [documentContext, setDocumentContext] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -130,7 +134,11 @@ function App() {
       switch (mode) {
         case 'chat':
           endpoint = '/chat';
-          body = JSON.stringify({ prompt: text });
+          body = JSON.stringify({ 
+            prompt: text,
+            conversationHistory: conversationHistory,
+            documentContext: documentContext
+          });
           response = await fetch(`${API_URL}${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -200,6 +208,28 @@ function App() {
       if (data.success) {
         const mediaType = detectMediaType(data.data);
         addMessage(data.data, 'bot', mediaType ? 'media' : 'text', mediaType);
+        
+        // Actualizar historial de conversacion solo para chat
+        if (mode === 'chat') {
+          setConversationHistory(prev => [
+            ...prev,
+            { role: 'user', content: text },
+            { role: 'assistant', content: data.data }
+          ]);
+        }
+        
+        // Si es analisis de documento (vision), guardar el contexto con el contenido extraido
+        if (mode === 'vision' && data.analysisType === 'document' && file) {
+          // Guardamos el contenido extraido del documento para memoria
+          const docContent = data.documentContent || data.data;
+          setDocumentContext({
+            fileName: file.name,
+            content: docContent,
+            analysis: data.data, // El analisis inicial
+            timestamp: new Date().toISOString()
+          });
+          addMessage('El documento ha sido cargado en la memoria. Puedes hacerme preguntas sobre su contenido en el modo Chat.', 'bot', 'info');
+        }
       } else {
         addMessage(`Error: ${data.error || 'Error desconocido'}`, 'bot', 'error');
       }
@@ -419,7 +449,7 @@ function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="logo-container">
-          <img src="/logo.png" alt="Macondo" className="logo" />
+          <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Seguros" className="logo" />
         </div>
         
         <div className="mode-section">
@@ -453,19 +483,51 @@ function App() {
       <main className="chat-main">
         <header className="chat-header">
           <div className="header-info">
-            <h1>Macondo Chat</h1>
+            <img 
+              src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" 
+              alt="HDI Seguros" 
+              className="header-logo"
+            />
             <span className="current-mode">
               <Icon name={currentMode?.icon} size={16} />
               {currentMode?.name}
             </span>
           </div>
-          <button 
-            className="mobile-mode-btn"
-            onClick={() => setShowModeSelector(!showModeSelector)}
-            aria-label="Seleccionar modo"
-          >
-            <Icon name="settings" size={24} />
-          </button>
+          <div className="header-actions">
+            {/* Indicador de contexto activo */}
+            {(documentContext || conversationHistory.length > 0) && (
+              <div className="context-indicator">
+                {documentContext && (
+                  <span className="context-badge document" title={`Documento: ${documentContext.fileName}`}>
+                    Doc: {documentContext.fileName.substring(0, 15)}...
+                  </span>
+                )}
+                {conversationHistory.length > 0 && (
+                  <span className="context-badge history" title={`${conversationHistory.length} mensajes en memoria`}>
+                    Memoria: {conversationHistory.length} msgs
+                  </span>
+                )}
+                <button 
+                  className="clear-context-btn"
+                  onClick={() => {
+                    setConversationHistory([]);
+                    setDocumentContext(null);
+                    addMessage('Memoria limpiada. El contexto anterior ha sido eliminado.', 'bot', 'info');
+                  }}
+                  title="Limpiar memoria"
+                >
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            )}
+            <button 
+              className="mobile-mode-btn"
+              onClick={() => setShowModeSelector(!showModeSelector)}
+              aria-label="Seleccionar modo"
+            >
+              <Icon name="settings" size={24} />
+            </button>
+          </div>
         </header>
 
         {/* Mobile mode selector */}
@@ -505,8 +567,8 @@ function App() {
 
           {messages.length === 0 ? (
             <div className="empty-chat">
-              <img src="/logo.png" alt="Macondo" className="empty-logo" />
-              <h2>Bienvenido a Macondo Chat</h2>
+              <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Seguros" className="empty-logo" />
+              <h2>Bienvenido a HDI Chat</h2>
               <p>Selecciona un modo y comienza a crear</p>
               <div className="quick-actions">
                 {MODES.slice(0, 4).map((m) => (
@@ -525,7 +587,7 @@ function App() {
               >
                 {msg.sender === 'bot' && (
                   <div className="message-avatar bot-avatar">
-                    <img src="/logo.png" alt="Bot" />
+                    <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Bot" />
                   </div>
                 )}
                 <div className="message-content">
@@ -542,7 +604,7 @@ function App() {
           {isLoading && (
             <div className="message bot loading">
               <div className="message-avatar bot-avatar">
-                <img src="/logo.png" alt="Bot" />
+                <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Bot" />
               </div>
               <div className="message-content">
                 <div className="typing-indicator">
