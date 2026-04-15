@@ -419,7 +419,7 @@ function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="logo-container">
-          <img src="/logo.png" alt="Macondo" className="logo" />
+          <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Seguros" className="logo" />
         </div>
         
         <div className="mode-section">
@@ -509,8 +509,8 @@ function App() {
 
           {messages.length === 0 ? (
             <div className="empty-chat">
-              <img src="/logo.png" alt="Macondo" className="empty-logo" />
-              <h2>Bienvenido a Macondo Chat</h2>
+              <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Seguros" className="empty-logo" />
+              <h2>Bienvenido a HDI Chat</h2>
               <p>Selecciona un modo y comienza a crear</p>
               <div className="quick-actions">
                 {MODES.slice(0, 4).map((m) => (
@@ -529,7 +529,7 @@ function App() {
               >
                 {msg.sender === 'bot' && (
                   <div className="message-avatar bot-avatar">
-                    <img src="/logo.png" alt="Bot" />
+                    <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Bot" />
                   </div>
                 )}
                 <div className="message-content">
@@ -546,7 +546,7 @@ function App() {
           {isLoading && (
             <div className="message bot loading">
               <div className="message-avatar bot-avatar">
-                <img src="/logo.png" alt="Bot" />
+                <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" alt="HDI Bot" />
               </div>
               <div className="message-content">
                 <div className="typing-indicator">
