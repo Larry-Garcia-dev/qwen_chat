@@ -453,7 +453,11 @@ function App() {
       <main className="chat-main">
         <header className="chat-header">
           <div className="header-info">
-            <h1>Macondo Chat</h1>
+            <img 
+              src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/logo-IuY2TUKQoH0RiIh35CCr4lfTCSDl0j.png" 
+              alt="HDI Seguros" 
+              className="header-logo"
+            />
             <span className="current-mode">
               <Icon name={currentMode?.icon} size={16} />
               {currentMode?.name}

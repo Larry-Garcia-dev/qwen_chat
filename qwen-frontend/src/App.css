@@ -202,12 +202,24 @@ body {
   flex-shrink: 0;
 }
 
+.header-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-logo {
+  height: 40px;
+  width: auto;
+  object-fit: contain;
+}
+
 .header-info h1 {
   font-size: 20px;
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 2px;
-}
+  }
 
 .current-mode {
   display: flex;
@@ -776,8 +788,12 @@ body {
     padding: 12px 16px;
   }
 
-  .header-info h1 {
-    font-size: 16px;
+.header-info h1 {
+  font-size: 16px;
+  }
+  
+  .header-logo {
+  height: 32px;
   }
 
   .chat-messages {
